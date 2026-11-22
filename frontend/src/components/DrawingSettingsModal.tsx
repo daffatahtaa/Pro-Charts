@@ -195,6 +195,7 @@ export const DrawingSettingsModal: React.FC = () => {
     setPoints(livePoints.map((p) => ({ ...p })));
     setStyles(JSON.parse(JSON.stringify(liveStyles)));
     setExt(initializedExt);
+    setTemplates(loadTemplates());
     setTab('style');
     setEditingTitle(false);
     setTemplateMenuOpen(false);
@@ -298,12 +299,34 @@ export const DrawingSettingsModal: React.FC = () => {
   const handleSaveTemplate = () => {
     const name = window.prompt(`Template name for ${displayTitle}:`, `${displayTitle} Custom`);
     if (!name || !name.trim()) return;
+    const normalizedStyles = {
+      ...styles,
+      line: {
+        ...(styles?.line || {}),
+        color: lineColor,
+        size: lineWidth,
+        style: lineStyle,
+        dashedValue: styles?.line?.dashedValue || [4, 4],
+      },
+      polygon: {
+        ...(styles?.polygon || {}),
+        color: styles?.polygon?.color || `${lineColor}2e`,
+        borderColor: styles?.polygon?.borderColor || lineColor,
+        borderSize: styles?.polygon?.borderSize ?? lineWidth,
+      },
+      rect: {
+        ...(styles?.rect || {}),
+        color: styles?.rect?.color || `${lineColor}2e`,
+        borderColor: styles?.rect?.borderColor || lineColor,
+        borderSize: styles?.rect?.borderSize ?? lineWidth,
+      },
+    };
     const preset: DrawingTemplatePreset = {
       id: `tpl_${Date.now()}`,
       name: name.trim(),
       toolName,
-      styles,
-      extendData: { ...ext, label: undefined, customTitle: undefined },
+      styles: JSON.parse(JSON.stringify(normalizedStyles)),
+      extendData: JSON.parse(JSON.stringify({ ...ext, customTitle: undefined })),
     };
     const next = [preset, ...templates];
     setTemplates(next);
@@ -313,14 +336,40 @@ export const DrawingSettingsModal: React.FC = () => {
   };
 
   const handleApplyTemplate = (preset: DrawingTemplatePreset) => {
-    const nextStyles = JSON.parse(JSON.stringify(preset.styles || {}));
+    const rawStyles = JSON.parse(JSON.stringify(preset.styles || {}));
+    const savedColor = rawStyles?.line?.color || lineColor;
+    const savedSize = rawStyles?.line?.size ?? lineWidth;
+    const savedStyle = rawStyles?.line?.style === 'dashed' ? 'dashed' : 'solid';
+    const nextStyles = {
+      ...rawStyles,
+      line: {
+        ...(rawStyles.line || {}),
+        color: savedColor,
+        size: savedSize,
+        style: savedStyle,
+        dashedValue: rawStyles?.line?.dashedValue || [4, 4],
+      },
+      polygon: {
+        ...(rawStyles.polygon || {}),
+        color: rawStyles?.polygon?.color || `${savedColor}2e`,
+        borderColor: rawStyles?.polygon?.borderColor || savedColor,
+        borderSize: rawStyles?.polygon?.borderSize ?? savedSize,
+      },
+      rect: {
+        ...(rawStyles.rect || {}),
+        color: rawStyles?.rect?.color || `${savedColor}2e`,
+        borderColor: rawStyles?.rect?.borderColor || savedColor,
+        borderSize: rawStyles?.rect?.borderSize ?? savedSize,
+      },
+    };
+    const presetExt = JSON.parse(JSON.stringify(preset.extendData || {}));
     const nextExt: DrawingExtendConfig = {
       ...ext,
-      ...JSON.parse(JSON.stringify(preset.extendData || {})),
+      ...presetExt,
     };
     setStyles(nextStyles);
     setExt(nextExt);
-    pushLivePreview(points, nextStyles, nextExt, false, false);
+    pushLivePreview(points, nextStyles, nextExt, true, false);
     setTemplateMenuOpen(false);
     showToast('info', `Applied template "${preset.name}"`);
   };
@@ -920,7 +969,29 @@ export const DrawingSettingsModal: React.FC = () => {
               <div className="h-[1px] bg-[#2a2e39]" />
 
               <div className="space-y-2">
-                <span className="text-[11.5px] text-[#787b86]">Text Label &amp; Alignment</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-[11.5px] text-[#787b86]">Text Label &amp; Alignment</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] text-[#787b86]">Text Color</span>
+                    <input
+                      type="color"
+                      value={ext.labelColor || '#d1d4dc'}
+                      onChange={(e) => updateExt({ labelColor: e.target.value })}
+                      title="Label Text Color"
+                      className="w-6 h-5 rounded border border-[#2a2e39] bg-transparent cursor-pointer"
+                    />
+                    {ext.labelColor && (
+                      <button
+                        type="button"
+                        onClick={() => updateExt({ labelColor: undefined })}
+                        title="Reset to Auto Contrast Color"
+                        className="px-1.5 py-0.5 rounded bg-[#131722] hover:bg-[#2a2e39] border border-[#2a2e39] text-[10px] text-[#787b86] hover:text-[#d1d4dc] cursor-pointer"
+                      >
+                        Auto
+                      </button>
+                    )}
+                  </div>
+                </div>
                 <div className="flex items-center gap-2">
                   <input
                     type="text"

@@ -88,7 +88,9 @@ export const rectBoxOverlay: OverlayTemplate = {
         pos === 'bottom' ? 'bottom' : pos === 'center' ? 'middle' : 'top';
 
       const canvasBg = useChartStore.getState().chartSettings.canvasBgColor;
-      const textColor = getContrastTextColor(canvasBg) === '#ffffff' ? '#d1d4dc' : '#131722';
+      const fallbackTextColor = getContrastTextColor(canvasBg) === '#ffffff' ? '#d1d4dc' : '#131722';
+      const textColor =
+        ext.labelColor && ext.labelColor.trim() ? ext.labelColor.trim() : fallbackTextColor;
 
       figures.push({
         type: 'text',

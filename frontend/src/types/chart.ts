@@ -24,7 +24,8 @@ export function parseTradingViewInterval(
   if (upper === 'W' || upper === '1W' || upper === 'W1') {
     return { tf: '1W', humanLabel: '1W (1 week)', seconds: 604800 };
   }
-  if (upper === 'M' || upper === '1M' || upper === 'MN' || upper === '1MN' || upper === 'MN1') {
+  // Case-sensitive: uppercase 'M'/'1M' = 1 Month, lowercase '1m' = 1 Minute!
+  if (s === 'M' || s === '1M' || upper === 'MN' || upper === '1MN' || upper === 'MN1') {
     return { tf: '1M', humanLabel: '1M (1 month)', seconds: 2592000 };
   }
 
@@ -667,6 +668,7 @@ export interface DrawingExtendConfig {
   label?: string;
   labelPosition?: LabelPosition;
   labelHAlign?: 'left' | 'center' | 'right';
+  labelColor?: string;
   customTitle?: string;
   extendLeft?: boolean;
   extendRight?: boolean;

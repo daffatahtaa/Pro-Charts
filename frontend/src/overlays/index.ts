@@ -379,12 +379,14 @@ function makeLabelFigure(
   label: string,
   _color: string,
   position: 'top' | 'center' | 'bottom' = 'top',
-  align: 'left' | 'center' | 'right' = 'center'
+  align: 'left' | 'center' | 'right' = 'center',
+  customTextColor?: string
 ) {
   const offsetY = position === 'bottom' ? y + 6 : position === 'center' ? y : y - 6;
   const baseline = position === 'bottom' ? 'top' : position === 'center' ? 'middle' : 'bottom';
   const canvasBg = useChartStore.getState().chartSettings.canvasBgColor;
-  const textColor = getContrastTextColor(canvasBg) === '#ffffff' ? '#d1d4dc' : '#131722';
+  const fallbackColor = getContrastTextColor(canvasBg) === '#ffffff' ? '#d1d4dc' : '#131722';
+  const textColor = customTextColor && customTextColor.trim() ? customTextColor.trim() : fallbackColor;
   return {
     type: 'text',
     ignoreEvent: true,
@@ -460,7 +462,7 @@ const labeledSegmentOverlay: OverlayTemplate = {
     if (label) {
       const midX = (coordinates[0].x + coordinates[1].x) / 2;
       const midY = (coordinates[0].y + coordinates[1].y) / 2;
-      figures.push(makeLabelFigure(midX, midY, label, color, pos));
+      figures.push(makeLabelFigure(midX, midY, label, color, pos, 'center', ext.labelColor));
     }
     return figures;
   },
@@ -504,10 +506,11 @@ const labeledRayLineOverlay: OverlayTemplate = {
         },
       },
     ];
-    const label = String((overlay.extendData as any)?.label || '').trim();
-    const pos = ((overlay.extendData as any)?.labelPosition || 'top') as 'top' | 'center' | 'bottom';
+    const ext = (overlay.extendData || {}) as DrawingExtendConfig;
+    const label = String(ext.label || '').trim();
+    const pos = (ext.labelPosition || 'top') as 'top' | 'center' | 'bottom';
     if (label) {
-      figures.push(makeLabelFigure((c0.x + c1.x) / 2, (c0.y + c1.y) / 2, label, color, pos));
+      figures.push(makeLabelFigure((c0.x + c1.x) / 2, (c0.y + c1.y) / 2, label, color, pos, 'center', ext.labelColor));
     }
     return figures;
   },
@@ -604,7 +607,9 @@ const labeledHorizontalLineOverlay: OverlayTemplate = {
       const offsetY = pos === 'bottom' ? y + 5 : pos === 'center' ? y : y - 5;
       const baseline = pos === 'bottom' ? 'top' : pos === 'center' ? 'middle' : 'bottom';
       const canvasBg = useChartStore.getState().chartSettings.canvasBgColor;
-      const textColor = getContrastTextColor(canvasBg) === '#ffffff' ? '#d1d4dc' : '#131722';
+      const textColor =
+        ext.labelColor ||
+        (getContrastTextColor(canvasBg) === '#ffffff' ? '#d1d4dc' : '#131722');
 
       figures.push({
         type: 'text',
@@ -843,7 +848,7 @@ const labeledFibRetraceOverlay: OverlayTemplate = {
       const badgeY =
         pos === 'bottom' ? botY + 14 : pos === 'center' ? (topY + botY) / 2 : topY - 14;
       figures.push(
-        makeLabelFigure((drawStartX + drawEndX) / 2, badgeY, customLabel, '#2962ff', pos)
+        makeLabelFigure((drawStartX + drawEndX) / 2, badgeY, customLabel, '#2962ff', pos, 'center', ext.labelColor)
       );
     }
 
@@ -900,7 +905,7 @@ const customSimpleAnnotationOverlay: OverlayTemplate = {
           baseline: 'bottom',
         },
         styles: {
-          color: '#ffffff',
+          color: (overlay.extendData as DrawingExtendConfig)?.labelColor || '#ffffff',
           size: 11.5,
           weight: 'bold',
           family: 'Trebuchet MS, sans-serif',
@@ -949,7 +954,7 @@ const customSimpleTagOverlay: OverlayTemplate = {
           baseline: 'middle',
         },
         styles: {
-          color: '#ffffff',
+          color: (overlay.extendData as DrawingExtendConfig)?.labelColor || '#ffffff',
           size: 11,
           weight: 'bold',
           family: 'JetBrains Mono, monospace',
@@ -1172,7 +1177,7 @@ const customStraightLineOverlay: OverlayTemplate = {
     const label = String(ext.label || '').trim();
     if (label) {
       const pos = (ext.labelPosition || 'top') as 'top' | 'center' | 'bottom';
-      figures.push(makeLabelFigure((c0.x + c1.x) / 2, (c0.y + c1.y) / 2, label, color, pos));
+      figures.push(makeLabelFigure((c0.x + c1.x) / 2, (c0.y + c1.y) / 2, label, color, pos, 'center', ext.labelColor));
     }
     return figures;
   },
@@ -1214,7 +1219,7 @@ const customHorizontalRayOverlay: OverlayTemplate = {
     const label = String(ext.label || '').trim();
     if (label) {
       const pos = (ext.labelPosition || 'top') as 'top' | 'center' | 'bottom';
-      figures.push(makeLabelFigure(Math.min(c.x + 60, bounding.width - 70), c.y, label, color, pos));
+      figures.push(makeLabelFigure(Math.min(c.x + 60, bounding.width - 70), c.y, label, color, pos, 'center', ext.labelColor));
     }
     return figures;
   },
@@ -1257,7 +1262,7 @@ const customVerticalLineOverlay: OverlayTemplate = {
     if (label) {
       const pos = (ext.labelPosition || 'top') as 'top' | 'center' | 'bottom';
       const lblY = pos === 'bottom' ? bounding.height - 24 : pos === 'center' ? bounding.height / 2 : 24;
-      figures.push(makeLabelFigure(x, lblY, label, color, pos));
+      figures.push(makeLabelFigure(x, lblY, label, color, pos, 'center', ext.labelColor));
     }
     return figures;
   },
@@ -1310,7 +1315,7 @@ const customPriceLineOverlay: OverlayTemplate = {
           baseline: 'bottom',
         },
         styles: {
-          color: '#ffffff',
+          color: ext.labelColor || '#ffffff',
           size: 11,
           weight: 'bold',
           family: 'JetBrains Mono, monospace',
@@ -1411,7 +1416,7 @@ const customParallelChannelOverlay: OverlayTemplate = {
         const pos = (ext.labelPosition || 'top') as 'top' | 'center' | 'bottom';
         const midX = (c0.x + c1.x) / 2;
         const midY = (c0.y + c1.y) / 2 + offsetY / 2;
-        figures.push(makeLabelFigure(midX, midY, label, color, pos));
+        figures.push(makeLabelFigure(midX, midY, label, color, pos, 'center', ext.labelColor));
       }
     }
 

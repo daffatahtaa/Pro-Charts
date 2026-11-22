@@ -170,6 +170,7 @@ export const ChartContextMenu: React.FC<ChartContextMenuProps> = ({
       setSavingTpl(false);
       return;
     }
+    setSavedTemplates(loadChartTemplates());
     const onMouseDown = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         onClose();
@@ -268,6 +269,16 @@ export const ChartContextMenu: React.FC<ChartContextMenuProps> = ({
   const handleApplySavedTemplate = (tpl: SavedChartTemplate) => {
     setChartType(tpl.chartType);
     updateChartSettings(tpl.chartSettings);
+    if (Array.isArray(tpl.indicators)) {
+      const store = useChartStore.getState();
+      store.activeIndicators.forEach((ind) => store.removeIndicator(ind.id));
+      tpl.indicators.forEach((ind, idx) => {
+        store.addIndicator({
+          ...ind,
+          id: ind.id || `tpl_ind_${Date.now()}_${idx}`,
+        });
+      });
+    }
     showToast('info', `Applied template "${tpl.name}"`);
     onClose();
   };

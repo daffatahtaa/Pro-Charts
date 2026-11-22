@@ -124,7 +124,8 @@ def normalize_tf_code(raw: str) -> Optional[str]:
         return "1D"
     if s.upper() in ("W", "1W", "W1"):
         return "1W"
-    if s.upper() in ("M", "1M", "MN", "1MN", "MN1"):
+    # Case-sensitive check: uppercase 'M'/'1M' = 1 Month, lowercase '1m' = 1 Minute!
+    if s in ("M", "1M") or s.upper() in ("MN", "1MN", "MN1"):
         return "1M"
 
     if s[0].upper() in ("M", "H", "D", "W") and s[1:].isdigit():
