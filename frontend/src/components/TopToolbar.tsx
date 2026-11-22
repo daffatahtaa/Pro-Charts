@@ -20,6 +20,7 @@ import {
   Maximize,
   Minimize,
   Camera,
+  Trash2,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useChartStore } from '../store/useChartStore';
@@ -54,6 +55,7 @@ export const TopToolbar: React.FC = () => {
     customTimeframes,
     togglePinnedTimeframe,
     addCustomTimeframe,
+    removeCustomTimeframe,
     chartType,
     setChartType,
     layoutMode,
@@ -129,38 +131,30 @@ export const TopToolbar: React.FC = () => {
     setTfMenuOpen(false);
   };
 
+  const BUILTIN_MINUTE_TFS = ['1m', '2m', '3m', '5m', '10m', '15m', '30m', '45m'];
+  const BUILTIN_HOUR_TFS = ['1h', '2h', '3h', '4h', '6h', '8h', '12h'];
+  const BUILTIN_DAY_WEEK_TFS = ['1D', '2D', '3D', '1W', '1M'];
+  const builtinTfSet = new Set([
+    ...BUILTIN_MINUTE_TFS,
+    ...BUILTIN_HOUR_TFS,
+    ...BUILTIN_DAY_WEEK_TFS,
+  ]);
+
   const minuteOptions = Array.from(
     new Set([
-      '1m',
-      '2m',
-      '3m',
-      '5m',
-      '10m',
-      '15m',
-      '30m',
-      '45m',
+      ...BUILTIN_MINUTE_TFS,
       ...customTimeframes.filter((t) => t.endsWith('m')),
     ])
   ).sort((a, b) => getTimeframeSeconds(a) - getTimeframeSeconds(b));
   const hourOptions = Array.from(
     new Set([
-      '1h',
-      '2h',
-      '3h',
-      '4h',
-      '6h',
-      '8h',
-      '12h',
+      ...BUILTIN_HOUR_TFS,
       ...customTimeframes.filter((t) => t.endsWith('h')),
     ])
   ).sort((a, b) => getTimeframeSeconds(a) - getTimeframeSeconds(b));
   const dayWeekOptions = Array.from(
     new Set([
-      '1D',
-      '2D',
-      '3D',
-      '1W',
-      '1M',
+      ...BUILTIN_DAY_WEEK_TFS,
       ...customTimeframes.filter((t) => t.endsWith('D') || t.endsWith('W') || t.endsWith('M')),
     ])
   ).sort((a, b) => getTimeframeSeconds(a) - getTimeframeSeconds(b));
@@ -281,6 +275,7 @@ export const TopToolbar: React.FC = () => {
                     {grp.items.map((tf) => {
                       const isPinned = pinnedTimeframes.includes(tf);
                       const isActive = timeframe === tf;
+                      const isCustom = !builtinTfSet.has(tf);
                       return (
                         <div
                           key={tf}
@@ -292,23 +287,46 @@ export const TopToolbar: React.FC = () => {
                             isActive ? 'text-[#2962ff] bg-[#2962ff]/10 font-semibold' : 'text-[#d1d4dc]'
                           }`}
                         >
-                          <span className="font-mono-num">{tf}</span>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              togglePinnedTimeframe(tf);
-                            }}
-                            title={isPinned ? 'Unpin from Top Bar' : 'Pin to Top Bar'}
-                            className="p-0.5 rounded hover:bg-[#131722]"
-                          >
-                            <Star
-                              className={`w-3.5 h-3.5 ${
-                                isPinned ? 'text-[#f59e0b]' : 'text-[#787b86]'
-                              }`}
-                              fill={isPinned ? '#f59e0b' : 'none'}
-                            />
-                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono-num">{tf}</span>
+                            {isCustom && (
+                              <span className="text-[9px] px-1 py-0.2 rounded bg-[#2962ff]/15 text-[#787b86]">
+                                custom
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            {isCustom && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  removeCustomTimeframe(tf);
+                                  showToast('info', `Removed custom timeframe ${tf}`);
+                                }}
+                                title={`Delete custom timeframe ${tf}`}
+                                className="p-0.5 rounded text-[#787b86] hover:text-[#f23645] hover:bg-[#131722]"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                togglePinnedTimeframe(tf);
+                              }}
+                              title={isPinned ? 'Unpin from Top Bar' : 'Pin to Top Bar'}
+                              className="p-0.5 rounded hover:bg-[#131722]"
+                            >
+                              <Star
+                                className={`w-3.5 h-3.5 ${
+                                  isPinned ? 'text-[#f59e0b]' : 'text-[#787b86]'
+                                }`}
+                                fill={isPinned ? '#f59e0b' : 'none'}
+                              />
+                            </button>
+                          </div>
                         </div>
                       );
                     })}

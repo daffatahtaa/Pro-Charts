@@ -319,6 +319,7 @@ interface ChartStore {
   setTimeframe: (tf: Timeframe) => void;
   togglePinnedTimeframe: (tf: string) => void;
   addCustomTimeframe: (tf: string) => void;
+  removeCustomTimeframe: (tf: string) => void;
   openSymbolSearchWithQuery: (query: string) => void;
   clearSymbolSearchInitialQuery: () => void;
   setWatchlistSymbols: (symbols: string[]) => void;
@@ -804,6 +805,24 @@ export const useChartStore = create<ChartStore>((set, get) => ({
         customTimeframes: nextCustom,
         pinnedTimeframes: nextPinned,
         timeframe: tf,
+      };
+    }),
+
+  removeCustomTimeframe: (tf) =>
+    set((state) => {
+      const nextCustom = state.customTimeframes.filter((t) => t !== tf);
+      let nextPinned = state.pinnedTimeframes.filter((t) => t !== tf);
+      if (nextPinned.length === 0) {
+        nextPinned = ['15m'];
+      }
+      try {
+        localStorage.setItem(LS_CUSTOM_TFS_KEY, JSON.stringify(nextCustom));
+        localStorage.setItem(LS_PINNED_TFS_KEY, JSON.stringify(nextPinned));
+      } catch {}
+      return {
+        customTimeframes: nextCustom,
+        pinnedTimeframes: nextPinned,
+        timeframe: state.timeframe === tf ? nextPinned[0] : state.timeframe,
       };
     }),
 
