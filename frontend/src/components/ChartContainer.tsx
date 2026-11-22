@@ -5,6 +5,8 @@ import { api } from '../services/api';
 import { marketWs } from '../services/ws';
 import { playAlertSound } from '../services/sound';
 import {
+  getHoveredOverlayId,
+  setHoveredOverlayId,
   setOverlayActiveTimeframe,
   setOverlayFromPixelConverter,
   setOverlayPixelConverter,
@@ -633,6 +635,30 @@ export const ChartContainer: React.FC = () => {
         setCoordTick((n) => (n + 1) % 1000000);
         return false;
       },
+      onMouseEnter: (event: OverlayEvent) => {
+        const ov: any = event.overlay;
+        if (!ov || isSystemOverlay(String(ov.id), String(ov.name))) return false;
+        const id = String(ov.id);
+        if (getHoveredOverlayId() !== id) {
+          setHoveredOverlayId(id);
+          if (ov.name === 'riskRewardLong' || ov.name === 'riskRewardShort') {
+            chartRef.current?.overrideOverlay({ id });
+          }
+        }
+        return false;
+      },
+      onMouseLeave: (event: OverlayEvent) => {
+        const ov: any = event.overlay;
+        if (!ov || isSystemOverlay(String(ov.id), String(ov.name))) return false;
+        const id = String(ov.id);
+        if (getHoveredOverlayId() === id) {
+          setHoveredOverlayId(null);
+          if (ov.name === 'riskRewardLong' || ov.name === 'riskRewardShort') {
+            chartRef.current?.overrideOverlay({ id });
+          }
+        }
+        return false;
+      },
       onSelected: (event: OverlayEvent) => {
         const ov: any = event.overlay;
         if (!ov || isSystemOverlay(String(ov.id), String(ov.name))) return false;
@@ -648,11 +674,18 @@ export const ChartContainer: React.FC = () => {
           label: String((ov.extendData as any)?.label || ''),
         };
         useChartStore.getState().setSelectedOverlay(info);
+        if (ov.name === 'riskRewardLong' || ov.name === 'riskRewardShort') {
+          chartRef.current?.overrideOverlay({ id: String(ov.id) });
+        }
         return false;
       },
-      onDeselected: () => {
+      onDeselected: (event: OverlayEvent) => {
         if (marqueeRef.current || marqueeJustFinishedRef.current) return false;
         useChartStore.getState().setSelectedOverlay(null);
+        const ov: any = event?.overlay;
+        if (ov && (ov.name === 'riskRewardLong' || ov.name === 'riskRewardShort')) {
+          chartRef.current?.overrideOverlay({ id: String(ov.id) });
+        }
         return false;
       },
       onDoubleClick: (event: OverlayEvent) => {
@@ -2644,14 +2677,26 @@ export const ChartContainer: React.FC = () => {
         chartRef.current &&
         (() => {
           void coordTick;
-          const handles: Array<{ key: string; x: number; y: number; shape: 'circle' | 'square' }> = [];
+          const handles: Array<{
+            key: string;
+            x: number;
+            y: number;
+            shape: 'circle' | 'square';
+            rrExpandOverlayId?: string;
+          }> = [];
           const idSet = new Set(selectedOverlayIds);
           const cw = containerRef.current?.clientWidth ?? 800;
           const ch = containerRef.current?.clientHeight ?? 500;
           const usableW = Math.max(80, cw - axisDims.yAxisWidth);
           const usableH = Math.max(80, ch - axisDims.xAxisHeight);
 
-          const pushHandle = (key: string, x: number, y: number, shape: 'circle' | 'square' = 'circle') => {
+          const pushHandle = (
+            key: string,
+            x: number,
+            y: number,
+            shape: 'circle' | 'square' = 'circle',
+            rrExpandOverlayId?: string
+          ) => {
             if (
               Number.isFinite(x) &&
               Number.isFinite(y) &&
@@ -2660,7 +2705,7 @@ export const ChartContainer: React.FC = () => {
               y >= 0 &&
               y <= usableH
             ) {
-              handles.push({ key, x, y, shape });
+              handles.push({ key, x, y, shape, rrExpandOverlayId });
             }
           };
 
@@ -2704,13 +2749,14 @@ export const ChartContainer: React.FC = () => {
               }
 
               if ((d.name === 'riskRewardLong' || d.name === 'riskRewardShort') && valid.length >= 3) {
-                // TradingView 4-handle Position: Top-Left square, Mid-Left circle, Bot-Left square, Mid-Right square
+                // TradingView 4-handle Position: Top-Left square, Mid-Left circle, Bot-Left square,
+                // and Mid-Right interactive circle handle (horizontal-only expand/shrink!)
                 const xLeft = Math.min(...valid.map((p) => p.x));
-                const xRight = Math.max(xLeft + 80, Math.max(...valid.map((p) => p.x)));
+                const xRight = Math.max(xLeft + 24, Math.max(...valid.map((p) => p.x)));
                 const ys = [valid[0].y, valid[1].y, valid[2].y].sort((a, b) => a - b);
                 pushHandle(`${d.id}_top`, xLeft, ys[0], 'square');
                 pushHandle(`${d.id}_entryL`, xLeft, ys[1], 'circle');
-                pushHandle(`${d.id}_entryR`, xRight, ys[1], 'square');
+                pushHandle(`${d.id}_entryR`, xRight, ys[1], 'circle', d.id);
                 pushHandle(`${d.id}_bot`, xLeft, ys[2], 'square');
                 continue;
               }
@@ -2749,17 +2795,115 @@ export const ChartContainer: React.FC = () => {
               }
             } catch {}
           }
+          const startRrHorizontalExpand = (
+            e: React.MouseEvent<HTMLDivElement>,
+            overlayId: string
+          ) => {
+            e.stopPropagation();
+            e.preventDefault();
+            const chart = chartRef.current;
+            const el = containerRef.current;
+            if (!chart || !el) return;
+            const ov: any = chart.getOverlayById(overlayId);
+            if (!ov || ov.lock || !Array.isArray(ov.points) || ov.points.length < 3) return;
+
+            dragActiveRef.current = true;
+            lastOverlaySelectedAtRef.current = Date.now();
+            const origPts = ov.points.map((p: any) => ({ ...p }));
+
+            // Resolve actual pixel X of each point to find left edge and right-edge point reliably
+            const pxRaw: any = chart.convertToPixel(origPts, { paneId: 'candle_pane' });
+            const pxArr: Array<{ x?: number; y?: number }> = Array.isArray(pxRaw)
+              ? pxRaw
+              : pxRaw
+              ? [pxRaw]
+              : [];
+            const leftPx = Math.min(
+              ...pxArr.map((p) => (typeof p?.x === 'number' && Number.isFinite(p.x) ? p.x : Infinity))
+            );
+            const leftConvRaw: any = Number.isFinite(leftPx)
+              ? chart.convertFromPixel([{ x: leftPx, y: 100 }], { paneId: 'candle_pane' })
+              : null;
+            const leftConv = Array.isArray(leftConvRaw) ? leftConvRaw[0] : leftConvRaw;
+            const leftBarIdx =
+              typeof leftConv?.dataIndex === 'number' && Number.isFinite(leftConv.dataIndex)
+                ? Math.round(leftConv.dataIndex)
+                : typeof origPts[0]?.dataIndex === 'number'
+                ? Math.round(origPts[0].dataIndex)
+                : 0;
+
+            // Point index 1 is always the independent right-edge point (points 0 & 2 are locked to left edge)
+            const rightPtIdx = 1;
+
+            const onMove = (ev: MouseEvent) => {
+              const rect = el.getBoundingClientRect();
+              const mx = Math.max(0, Math.min(rect.width - axisDims.yAxisWidth, ev.clientX - rect.left));
+              const my = Math.max(0, Math.min(rect.height - axisDims.xAxisHeight, ev.clientY - rect.top));
+              try {
+                const res: any = chart.convertFromPixel([{ x: mx, y: my }], { paneId: 'candle_pane' });
+                const pt = Array.isArray(res) ? res[0] : res;
+                if (!pt || typeof pt.dataIndex !== 'number' || !Number.isFinite(pt.dataIndex)) return;
+
+                const nextIdx = Math.max(leftBarIdx + 1, Math.round(pt.dataIndex));
+                // CRITICAL: Do NOT retain stale `origPts[rightPtIdx].timestamp` when dragging into future space,
+                // because KLineCharts prioritizes `timestamp` over `dataIndex` if present!
+                const nextRightPt: any = {
+                  value: origPts[rightPtIdx].value,
+                  dataIndex: nextIdx,
+                };
+                if (typeof pt.timestamp === 'number' && Number.isFinite(pt.timestamp)) {
+                  nextRightPt.timestamp = pt.timestamp;
+                }
+
+                const nextPts = origPts.map((p: any, idx: number) =>
+                  idx === rightPtIdx ? nextRightPt : { ...p }
+                );
+                chart.overrideOverlay({ id: overlayId, points: nextPts });
+                setCoordTick((n) => (n + 1) % 1000000);
+              } catch {}
+            };
+
+            const onUp = () => {
+              window.removeEventListener('mousemove', onMove);
+              window.removeEventListener('mouseup', onUp);
+              lastOverlaySelectedAtRef.current = Date.now();
+              window.setTimeout(() => {
+                dragActiveRef.current = false;
+              }, 120);
+              const updated = chart.getOverlayById(overlayId);
+              if (updated) persistOverlay(updated, false);
+              setCoordTick((n) => (n + 1) % 1000000);
+            };
+
+            window.addEventListener('mousemove', onMove);
+            window.addEventListener('mouseup', onUp);
+          };
+
           return (
             <div className="absolute inset-0 pointer-events-none z-[26] overflow-hidden">
-              {handles.map((h) => (
-                <div
-                  key={h.key}
-                  style={{ left: `${h.x}px`, top: `${h.y}px` }}
-                  className={`absolute -translate-x-1/2 -translate-y-1/2 w-[10px] h-[10px] bg-white border-[2px] border-[#2962ff] shadow-sm ${
-                    h.shape === 'square' ? 'rounded-[2px]' : 'rounded-full'
-                  }`}
-                />
-              ))}
+              {handles.map((h) =>
+                h.rrExpandOverlayId ? (
+                  <div
+                    key={h.key}
+                    data-no-marquee="true"
+                    title="Drag left / right to resize position width"
+                    onMouseDown={(e) => startRrHorizontalExpand(e, h.rrExpandOverlayId!)}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ left: `${h.x}px`, top: `${h.y}px` }}
+                    className="absolute -translate-x-1/2 -translate-y-1/2 w-[18px] h-[18px] flex items-center justify-center pointer-events-auto cursor-ew-resize group"
+                  >
+                    <span className="w-[11px] h-[11px] bg-white border-[2px] border-[#2962ff] rounded-full shadow-sm group-hover:scale-125 transition-transform" />
+                  </div>
+                ) : (
+                  <div
+                    key={h.key}
+                    style={{ left: `${h.x}px`, top: `${h.y}px` }}
+                    className={`absolute -translate-x-1/2 -translate-y-1/2 w-[10px] h-[10px] bg-white border-[2px] border-[#2962ff] shadow-sm ${
+                      h.shape === 'square' ? 'rounded-[2px]' : 'rounded-full'
+                    }`}
+                  />
+                )
+              )}
             </div>
           );
         })()}

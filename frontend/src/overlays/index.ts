@@ -122,6 +122,14 @@ export function isOverlayShiftPressed(): boolean {
   return overlayShiftPressed;
 }
 
+let hoveredOverlayId: string | null = null;
+export function setHoveredOverlayId(id: string | null) {
+  hoveredOverlayId = id;
+}
+export function getHoveredOverlayId(): string | null {
+  return hoveredOverlayId;
+}
+
 type FromPixelConverterFn = (
   pts: Array<{ x?: number; y?: number }>
 ) => Array<{ timestamp?: number; dataIndex?: number; value?: number }>;

@@ -908,7 +908,7 @@ export const DrawingSettingsModal: React.FC = () => {
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
                       type="checkbox"
-                      checked={ext.alwaysShowStats !== false}
+                      checked={ext.alwaysShowStats === true}
                       onChange={(e) => updateExt({ alwaysShowStats: e.target.checked })}
                       className="accent-[#2962ff]"
                     />
