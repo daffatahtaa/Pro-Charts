@@ -1,7 +1,36 @@
 {
-  "name": "forex-chart-frontend",
+  "name": "pro-charts-frontend",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.5.3",
+  "description": "Free open-source TradingView alternative powered by live MetaTrader 5 execution, Pine Script v6 engine, and multi-timeframe Forex Bar Replay.",
+  "keywords": [
+    "tradingview",
+    "tradingview-clone",
+    "tradingview-alternative",
+    "metatrader5",
+    "mt5",
+    "pine-script",
+    "pine-script-v6",
+    "forex",
+    "bar-replay",
+    "backtesting",
+    "technical-analysis",
+    "candlestick-chart",
+    "klinecharts",
+    "fastapi",
+    "react",
+    "typescript"
+  ],
+  "homepage": "https://github.com/daffatahtaa/Pro-Charts#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/daffatahtaa/Pro-Charts.git"
+  },
+  "bugs": {
+    "url": "https://github.com/daffatahtaa/Pro-Charts/issues"
+  },
+  "author": "Daps <43267539+daffatahtaa@users.noreply.github.com>",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",

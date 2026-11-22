@@ -1,0 +1,35 @@
+name: Feature Request
+description: Suggest a new feature, Pine Script v6 function, drawing tool, or MT5 integration improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: category
+    attributes:
+      label: Feature Category
+      options:
+        - Pine Script v6 Function / Language Feature
+        - Drawing Tool / Chart Overlay
+        - Bar Replay & Backtesting
+        - MetaTrader 5 Execution & Broker Support
+        - Trading Journal & Analytics
+        - UI / Keyboard Shortcuts / UX
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Trading Workflow Need
+      description: Describe the workflow or TradingView feature you'd like in Pro-Charts.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How should this feature work?
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context / Screenshots
+      description: Links, Pine Script references, or mockups.
