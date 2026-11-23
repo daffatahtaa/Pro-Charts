@@ -12,8 +12,8 @@
 
 | Version | Supported |
 | :--- | :--- |
-| `2.5.x` | Yes |
-| `< 2.5.0` | No — please update to the latest `main` branch |
+| `2.6.x` | Yes |
+| `< 2.6.0` | No — please update to the latest `main` branch |
 
 ## Reporting a Vulnerability
 

@@ -1,7 +1,7 @@
 {
   "name": "pro-charts-frontend",
   "private": true,
-  "version": "2.5.3",
+  "version": "2.6.0",
   "description": "Free open-source TradingView alternative powered by live MetaTrader 5 execution, Pine Script v6 engine, and multi-timeframe Forex Bar Replay.",
   "keywords": [
     "tradingview",

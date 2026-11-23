@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [2.6.0] — Bulk Order Management, Pine v6 Full Compatibility, Pair-Correlated News & Multi-Chart Drawing Suite
+
+### Added
+- **Pine Script v6 Engine Compatibility Upgrade (#4):** Added `method`, `enum`, `map`, and `matrix` support, multi-timeframe `request.security()`, dynamic `ta.*` functions, expanded Pine drawing primitives, compiler diagnostics in `IndicatorsModal.tsx`, and a Vitest compatibility test suite (`pineV6Compat.test.ts`).
+- **Pair-Correlated Bottom Chart News & Economic Events (#17):** Added `ChartNewsOverlay.tsx` and `backend/news_service.py` with DuckDB caching, automatic broker affix stripping (`XAUUSDm`, `EURUSD.raw`, `GBPUSDc`), High/Medium/Low impact filters, configurable correlation scope in `ChartSettingsModal.tsx`, quick toggle in `BottomStatusBar.tsx`, and Bar Replay lookahead protection.
+- **Bulk Set SL/TP & Bulk Close (#13, #15, #16):** Added `BulkSlTpEditor.tsx`, per-symbol scoped bulk SL/TP management with cross-pair safety guards, drag-to-bulk on-chart SL/TP lines, bulk close with confirmation dialog, Paper/Bar Replay support, and backend endpoints `POST /api/mt5/trade/bulk/modify` & `/bulk/close` backed by pytest coverage.
+- **Interactive Secondary Multi-Chart Panes (#1):** Enabled full drawing tools, live Bid/Ask lines & price labels, and unambiguous active-pane selection on secondary split-screen charts.
+- **Drawing Engine Enhancements (#2, #6, #8, #9, #10, #12, #14):** Added universal opacity controls across all drawing tools, 8-handle rectangle resizing, unlimited Path points until cancelled, strict lock protection preventing move/delete, z-order preservation when hiding/showing drawings, full drawing grouping, and safe right-click context menus.
+- **UI Scale & Running-Trade Line Styling (#7, #11):** Added canvas-safe UI scaling setting and configurable running-trade line styling in `ChartSettingsModal.tsx`.
+- **R:R Position Tool & Custom Timeframe UX:** Added hover/select-only R:R statistics, horizontal-only right-middle expander, entry-hit trade execution visual, and delete button for custom timeframes.
+- **CI & Automated Testing:** Added GitHub Actions CI workflow (`.github/workflows/pr.yml`) covering backend `pytest` (17 tests), frontend `vitest` (6 tests), `tsc && vite build`, and isolated stack smoke checks.
+
+### Fixed
+- **Clean Default Watchlist & Price Precision (#3, #5):** Removed hardcoded broker defaults (`IC Market` / `Exness Cent`) from the default watchlist and added thousands separators + symbol-digit precision to position SL/TP prices.
+- **Windows Launcher Auto-Bootstrap:** Upgraded `start-dev.bat` to automatically create `backend/.venv`, install Python & npm dependencies on fresh clones, and surface setup errors cleanly.
+- **Timeframe & Label Fixes:** Fixed `1m` vs `1M` timeframe parsing, label text color picker, and saved preset loading.
+
+---
+
 ## [2.5.3] — Pine v6 `xloc.bar_time` Canvas Projection & Auto Chart-TF Detection
 
 ### Fixed
