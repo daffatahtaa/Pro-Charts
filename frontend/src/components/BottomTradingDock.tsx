@@ -12,6 +12,7 @@ import {
 import { api } from '../services/api';
 import { useChartStore } from '../store/useChartStore';
 import { PositionItem } from '../types/chart';
+import { BulkSlTpEditor } from './BulkSlTpEditor';
 
 export const BottomTradingDock: React.FC = () => {
   const {
@@ -29,6 +30,7 @@ export const BottomTradingDock: React.FC = () => {
     closePaperTrade,
     cancelPaperTrade,
     breakevenPaperTrade,
+    bulkPaperModify,
     setAccountModalOpen,
     setBacktestModalOpen,
     openAnalyticsHub,
@@ -40,6 +42,8 @@ export const BottomTradingDock: React.FC = () => {
   const [scope, setScope] = useState<'all' | 'pair' | 'selected'>('all');
   const [pairFilter, setPairFilter] = useState<string>('');
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkEditorOpen, setBulkEditorOpen] = useState(false);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; kind: 'live' | 'paper'; symbol: string } | null>(null);
 
   const isPaper = replay.isActive;
   const paperOpen = paperAccount.trades.filter((t) => t.status === 'OPEN');
@@ -125,6 +129,26 @@ export const BottomTradingDock: React.FC = () => {
       positions.forEach((p) => (allSelected ? next.delete(p.ticket) : next.add(p.ticket)));
       return next;
     });
+  };
+
+  const handleBulkApply = async (sl?: number, tp?: number) => {
+    setBulkBusy(true);
+    try {
+      if (isPaper) {
+        const ids = paperOpen.map((t) => t.id);
+        bulkPaperModify(ids, { sl, tp });
+        showToast('success', `Bulk SL/TP applied to ${ids.length} paper trade(s)`);
+      } else {
+        const res = await api.bulkModifyTrade({ tickets: bulkTargetTickets(), sl, tp });
+        showToast(res.success ? 'success' : 'error', res.message);
+        await refreshTradeState();
+      }
+    } catch (err: any) {
+      showToast('error', err?.message || 'Bulk SL/TP failed');
+    } finally {
+      setBulkBusy(false);
+      setBulkEditorOpen(false);
+    }
   };
 
   return (
@@ -277,7 +301,14 @@ export const BottomTradingDock: React.FC = () => {
                     {paperOpen.map((tr) => {
                       const isProfit = tr.pnl_money >= 0;
                       return (
-                        <tr key={tr.id} className="hover:bg-[#1e222d]/80">
+                        <tr
+                          key={tr.id}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'paper', symbol: tr.symbol });
+                          }}
+                          className="hover:bg-[#1e222d]/80"
+                        >
                           <td className="py-1.5 px-3 font-sans font-semibold text-[#d1d4dc]">
                             {tr.symbol}
                           </td>
@@ -423,7 +454,7 @@ export const BottomTradingDock: React.FC = () => {
                   </select>
                 )}
                 <button
-                  onClick={() => showToast('info', 'Bulk SL/TP editor lands in the next commit')}
+                  onClick={() => setBulkEditorOpen(true)}
                   disabled={bulkCount === 0 || bulkBusy}
                   className="px-2 py-0.5 rounded bg-[#2962ff]/15 hover:bg-[#2962ff]/30 text-[#2962ff] text-[10.5px] font-sans font-semibold disabled:opacity-40"
                 >
@@ -469,6 +500,10 @@ export const BottomTradingDock: React.FC = () => {
                         key={pos.ticket}
                         onClick={() => {
                           if (pos.symbol !== symbol) setSymbol(pos.symbol);
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'live', symbol: pos.symbol });
                         }}
                         className="hover:bg-[#1e222d]/80 cursor-pointer transition-colors"
                       >
@@ -632,6 +667,36 @@ export const BottomTradingDock: React.FC = () => {
             </table>
           )}
         </div>
+      )}
+
+      {ctxMenu && (
+        <div
+          className="fixed z-50 bg-[#1e222d] border border-[#2a2e39] rounded shadow-xl py-1 min-w-[190px]"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          onMouseLeave={() => setCtxMenu(null)}
+        >
+          <button
+            onClick={() => {
+              if (ctxMenu.kind === 'live') {
+                setScope('pair');
+                setPairFilter(ctxMenu.symbol);
+              }
+              setBulkEditorOpen(true);
+              setCtxMenu(null);
+            }}
+            className="w-full text-left px-3 py-1.5 text-[11.5px] font-sans text-[#d1d4dc] hover:bg-[#2962ff]/15"
+          >
+            Bulk Set SL/TP ({ctxMenu.kind === 'live' ? ctxMenu.symbol : 'all paper'})
+          </button>
+        </div>
+      )}
+
+      {bulkEditorOpen && (
+        <BulkSlTpEditor
+          count={isPaper ? paperOpen.length : bulkCount}
+          onApply={handleBulkApply}
+          onClose={() => setBulkEditorOpen(false)}
+        />
       )}
     </section>
   );
