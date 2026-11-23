@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useChartStore } from '../store/useChartStore';
-import { PositionItem } from '../types/chart';
+import { PositionItem, BulkTradeResult } from '../types/chart';
 import { BulkSlTpEditor } from './BulkSlTpEditor';
 
 export const BottomTradingDock: React.FC = () => {
@@ -125,6 +125,16 @@ export const BottomTradingDock: React.FC = () => {
     setBulkTickets(allSelected ? [] : positions.map((p) => p.ticket));
   };
 
+  const summarizeBulk = (res: BulkTradeResult): string => {
+    const fails = res.results.filter((r) => !r.success);
+    if (!fails.length) return res.message;
+    const detail = fails
+      .slice(0, 2)
+      .map((f) => `#${f.order_ticket}: ${f.message}`)
+      .join(' | ');
+    return `${res.message} — ${detail}${fails.length > 2 ? ` (+${fails.length - 2} more)` : ''}`;
+  };
+
   const handleBulkApply = async (sl?: number, tp?: number) => {
     setBulkBusy(true);
     try {
@@ -134,7 +144,7 @@ export const BottomTradingDock: React.FC = () => {
         showToast('success', `Bulk SL/TP applied to ${ids.length} paper trade(s)`);
       } else {
         const res = await api.bulkModifyTrade({ tickets: bulkTargetTickets(), sl, tp });
-        showToast(res.success ? 'success' : 'error', res.message);
+        showToast(res.success ? 'success' : 'error', summarizeBulk(res));
         await refreshTradeState();
       }
     } catch (err: any) {
@@ -156,7 +166,7 @@ export const BottomTradingDock: React.FC = () => {
         bulkPaperClose(paperOpen.map((t) => t.id));
       } else {
         const res = await api.bulkClosePosition(bulkTargetTickets());
-        showToast(res.success ? 'success' : 'error', res.message);
+        showToast(res.success ? 'success' : 'error', summarizeBulk(res));
         await refreshTradeState();
       }
     } catch (err: any) {

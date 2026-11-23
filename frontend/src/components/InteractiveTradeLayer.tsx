@@ -382,7 +382,8 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
           }
         } else {
           const targets = bulkTargetsRef.current;
-          if (targets.length > 0) {
+          // Guard: only bulk-apply when the dragged trade itself is in the target set
+          if (targets.length > 0 && targets.includes(Number(tr.id))) {
             try {
               const payload: { tickets: number[]; sl?: number; tp?: number } = { tickets: targets };
               if (cur.kind === 'sl') payload.sl = newSl;
@@ -392,7 +393,12 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
                 showToast('success', `Bulk updated ${targets.length} position(s)`);
                 await refreshTradeState();
               } else {
-                showToast('error', res.message || 'Bulk modify failed');
+                const fails = res.results.filter((r) => !r.success);
+                const detail = fails.length
+                  ? ` — ${fails.slice(0, 2).map((f) => `#${f.order_ticket}: ${f.message}`).join(' | ')}`
+                  : '';
+                showToast('error', `${res.message}${detail}`);
+                await refreshTradeState();
               }
             } catch (err: any) {
               showToast('error', err?.message || 'Bulk modify failed');
