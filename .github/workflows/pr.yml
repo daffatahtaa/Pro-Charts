@@ -1,0 +1,62 @@
+name: PR checks
+
+on:
+  pull_request:
+
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install backend deps
+        working-directory: backend
+        run: pip install -r requirements.txt
+      - name: Run backend tests (mock mode, never touches a real terminal)
+        working-directory: backend
+        run: python -m pytest tests -v
+
+  frontend-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+      - name: Build frontend (tsc + vite)
+        working-directory: frontend
+        run: npm run build
+
+  e2e-smoke:
+    # Isolated per-PR stack: uvicorn + vite spun up inside this job only.
+    needs: [backend-tests, frontend-build]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install deps
+        run: pip install -r backend/requirements.txt
+      - run: cd frontend && npm ci
+      - name: Start stack
+        run: |
+          Start-Process -FilePath python -ArgumentList '-m','uvicorn','main:app','--host','0.0.0.0','--port','8000' -WorkingDirectory backend
+          Start-Process -FilePath 'npm.cmd' -ArgumentList 'run','dev' -WorkingDirectory frontend
+      - name: Smoke test stack
+        run: |
+          curl.exe -fsS --retry 30 --retry-delay 2 --retry-all-errors http://localhost:8000/api/mt5/status
+          curl.exe -fsS --retry 30 --retry-delay 2 --retry-all-errors http://localhost:5173/
+          curl.exe -fsS http://localhost:8000/docs
