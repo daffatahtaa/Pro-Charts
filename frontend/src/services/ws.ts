@@ -10,6 +10,7 @@ class MarketWebSocket {
   private ws: WebSocket | null = null;
   private symbol = 'XAUUSD';
   private tf: Timeframe = '15m';
+  private extraStreams: Array<{ symbol: string; tf: Timeframe }> = [];
   private reconnectTimer: number | null = null;
   private manualClose = false;
   private tickListeners = new Set<TickListener>();
@@ -43,6 +44,19 @@ class MarketWebSocket {
     }
   }
 
+  setExtraSubscriptions(streams: Array<{ symbol: string; tf: Timeframe }>) {
+    const dedup = new Map<string, { symbol: string; tf: Timeframe }>();
+    for (const s of streams) {
+      if (s.symbol && s.tf) {
+        dedup.set(`${s.symbol}__${s.tf}`, s);
+      }
+    }
+    this.extraStreams = Array.from(dedup.values());
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.sendExtraSubscribe();
+    }
+  }
+
   private openSocket() {
     if (this.reconnectTimer !== null) {
       window.clearTimeout(this.reconnectTimer);
@@ -59,6 +73,9 @@ class MarketWebSocket {
     this.ws.onopen = () => {
       this.emitStatus(true);
       this.sendSubscribe();
+      if (this.extraStreams.length > 0) {
+        this.sendExtraSubscribe();
+      }
     };
 
     this.ws.onmessage = (event) => {
@@ -100,6 +117,17 @@ class MarketWebSocket {
           action: 'subscribe',
           symbol: this.symbol,
           tf: this.tf,
+        })
+      );
+    }
+  }
+
+  private sendExtraSubscribe() {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(
+        JSON.stringify({
+          action: 'subscribe_extra',
+          streams: this.extraStreams,
         })
       );
     }

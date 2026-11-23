@@ -262,7 +262,9 @@ interface ChartStore {
   selectedOverlayIds: string[];
   drawingSettingsOverlayId: string | null;
   drawingsList: DrawingItem[];
+  drawingsBySymbol: Record<string, DrawingItem[]>;
   drawingGroups: DrawingGroupFolder[];
+  paneBridges: Partial<Record<PaneId, ChartActionsBridge>>;
   undoStack: DrawingItem[][];
   redoStack: DrawingItem[][];
 
@@ -357,6 +359,8 @@ interface ChartStore {
   toggleSelectedOverlayId: (id: string) => void;
   setDrawingSettingsOverlayId: (id: string | null) => void;
   setDrawingsList: (list: DrawingItem[]) => void;
+  setDrawingsForSymbol: (symbol: string, list: DrawingItem[]) => void;
+  registerPaneBridge: (paneId: PaneId, bridge: ChartActionsBridge) => void;
   addEmptyDrawingGroup: (symbol: string, name?: string) => DrawingGroupFolder;
   renameEmptyDrawingGroup: (groupId: string, name: string) => void;
   removeEmptyDrawingGroup: (groupId: string) => void;
@@ -563,7 +567,9 @@ export const useChartStore = create<ChartStore>((set, get) => ({
   selectedOverlayIds: [],
   drawingSettingsOverlayId: null,
   drawingsList: [],
+  drawingsBySymbol: {},
   drawingGroups: loadLS<DrawingGroupFolder[]>(LS_DRAWING_GROUPS_KEY, []),
+  paneBridges: {},
   undoStack: [],
   redoStack: [],
 
@@ -786,7 +792,24 @@ export const useChartStore = create<ChartStore>((set, get) => ({
     set({ timeframe: tf, crosshairData: null });
   },
 
-  setActivePaneId: (paneId) => set({ activePaneId: paneId }),
+  setActivePaneId: (paneId) =>
+    set((state) => {
+      if (state.activePaneId === paneId) return state;
+      const targetSymbol =
+        state.layoutMode !== '1' && paneId !== 'pane-1'
+          ? state.secondaryPanes[paneId as SecondaryPaneId]?.symbol || state.symbol
+          : state.symbol;
+      const nextBridge =
+        state.paneBridges[paneId] || state.paneBridges['pane-1'] || state.bridge;
+      const nextDrawings = state.drawingsBySymbol[targetSymbol] ?? state.drawingsList;
+      return {
+        activePaneId: paneId,
+        selectedOverlay: null,
+        selectedOverlayIds: [],
+        bridge: { ...state.bridge, ...nextBridge },
+        drawingsList: nextDrawings,
+      };
+    }),
 
   toggleSyncSymbolAcrossPanes: () =>
     set((state) => {
@@ -979,7 +1002,43 @@ export const useChartStore = create<ChartStore>((set, get) => ({
 
   setDrawingSettingsOverlayId: (drawingSettingsOverlayId) => set({ drawingSettingsOverlayId }),
 
-  setDrawingsList: (drawingsList) => set({ drawingsList }),
+  setDrawingsList: (drawingsList) =>
+    set((state) => {
+      const sym =
+        state.layoutMode !== '1' && state.activePaneId !== 'pane-1'
+          ? state.secondaryPanes[state.activePaneId as SecondaryPaneId]?.symbol || state.symbol
+          : state.symbol;
+      return {
+        drawingsList,
+        drawingsBySymbol: { ...state.drawingsBySymbol, [sym]: drawingsList },
+      };
+    }),
+
+  setDrawingsForSymbol: (sym, list) =>
+    set((state) => {
+      const activeSym =
+        state.layoutMode !== '1' && state.activePaneId !== 'pane-1'
+          ? state.secondaryPanes[state.activePaneId as SecondaryPaneId]?.symbol || state.symbol
+          : state.symbol;
+      return {
+        drawingsBySymbol: { ...state.drawingsBySymbol, [sym]: list },
+        ...(activeSym === sym ? { drawingsList: list } : {}),
+      };
+    }),
+
+  registerPaneBridge: (paneId, paneBridge) =>
+    set((state) => {
+      const nextPaneBridges = {
+        ...state.paneBridges,
+        [paneId]: { ...(state.paneBridges[paneId] || {}), ...paneBridge },
+      };
+      return {
+        paneBridges: nextPaneBridges,
+        ...(state.activePaneId === paneId || (state.layoutMode === '1' && paneId === 'pane-1')
+          ? { bridge: { ...state.bridge, ...nextPaneBridges[paneId] } }
+          : {}),
+      };
+    }),
 
   addEmptyDrawingGroup: (symbol, name) => {
     const state = get();
@@ -2398,5 +2457,13 @@ export const useChartStore = create<ChartStore>((set, get) => ({
   },
 
   registerBridge: (bridge) =>
-    set((state) => ({ bridge: { ...state.bridge, ...bridge } })),
+    set((state) => {
+      const mergedPrimary = { ...(state.paneBridges['pane-1'] || {}), ...bridge };
+      return {
+        paneBridges: { ...state.paneBridges, 'pane-1': mergedPrimary },
+        ...(state.activePaneId === 'pane-1' || state.layoutMode === '1'
+          ? { bridge: { ...state.bridge, ...bridge } }
+          : {}),
+      };
+    }),
 }));

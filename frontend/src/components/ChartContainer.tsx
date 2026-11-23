@@ -2043,7 +2043,11 @@ export const ChartContainer: React.FC = () => {
     window.requestAnimationFrame(() => syncYAxisRef.current());
   }, [candles.length, liveTick, chartSettings, replay.isActive, replay.cutIndex]);
 
-  // 7. Activate Drawing Tool when selected (ONLY depends on activeTool so toggling Ctrl/Magnet mid-draw NEVER spawns duplicates!)
+  // 7. Activate Drawing Tool when selected (ONLY when primary pane-1 is active in multi-chart mode!)
+  const layoutMode = useChartStore((s) => s.layoutMode);
+  const activePaneId = useChartStore((s) => s.activePaneId);
+  const isPrimaryPaneFocused = layoutMode === '1' || activePaneId === 'pane-1';
+
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
@@ -2053,7 +2057,7 @@ export const ChartContainer: React.FC = () => {
       } catch {}
       inProgressOverlayIdRef.current = null;
     }
-    if (!activeTool) return;
+    if (!activeTool || !isPrimaryPaneFocused) return;
 
     const cur = useChartStore.getState();
     const events = buildOverlayEvents();
@@ -2067,7 +2071,56 @@ export const ChartContainer: React.FC = () => {
       ...events,
     });
     inProgressOverlayIdRef.current = typeof createdId === 'string' ? createdId : null;
-  }, [activeTool, buildOverlayEvents]);
+  }, [activeTool, isPrimaryPaneFocused, buildOverlayEvents]);
+
+  // 7b. Cross-pane live drawing sync: if another pane modifies drawingsBySymbol[symbol], mirror changes onto pane-1!
+  const primarySymDrawings = useChartStore((s) => s.drawingsBySymbol[s.symbol]);
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !primarySymDrawings) return;
+    if (layoutMode === '1' || activePaneId === 'pane-1') return;
+    const st = useChartStore.getState();
+    const events = buildOverlayEvents();
+    const existingIds = new Set(primarySymDrawings.map((d) => d.id));
+    // Remove overlays deleted from another pane
+    try {
+      const allOvs: any[] =
+        (chart as any)._chartStore?.getOverlayStore?.()?.getInstances?.('candle_pane') || [];
+      for (const ov of allOvs) {
+        const oid = String(ov.id);
+        if (!isSystemOverlay(oid, String(ov.name)) && !existingIds.has(oid)) {
+          chart.removeOverlay({ id: oid });
+        }
+      }
+    } catch {}
+    primarySymDrawings.forEach((d, idx) => {
+      const curOv = chart.getOverlayById(d.id);
+      if (curOv) {
+        chart.overrideOverlay({
+          id: d.id,
+          points: d.points,
+          styles: d.styles,
+          extendData: d.extendData,
+          lock: st.drawingsLocked || Boolean(d.locked),
+          visible: st.drawingsVisible && d.visible !== false,
+        });
+      } else {
+        try {
+          chart.createOverlay({
+            id: d.id,
+            name: d.name,
+            points: d.points,
+            styles: d.styles,
+            extendData: d.extendData,
+            lock: st.drawingsLocked || Boolean(d.locked),
+            visible: st.drawingsVisible && d.visible !== false,
+            zLevel: d.sort_order ?? idx + 1,
+            ...events,
+          });
+        } catch {}
+      }
+    });
+  }, [primarySymDrawings, layoutMode, activePaneId, buildOverlayEvents]);
 
   // 8. Sync global drawings lock / visibility / magnet WITHOUT clobbering individual drawing lock/visible states (Issue #8)
   useEffect(() => {

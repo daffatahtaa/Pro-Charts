@@ -184,6 +184,16 @@ export function App() {
       } else if (!isInput && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && key === 's') {
         e.preventDefault();
         void copySnapshotLink();
+      } else if (!isInput && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && ['1', '2', '3', '4'].includes(key)) {
+        const st = useChartStore.getState();
+        if (st.layoutMode !== '1') {
+          const idx = Number(key);
+          const maxPanes = st.layoutMode === '4' ? 4 : 2;
+          if (idx <= maxPanes) {
+            e.preventDefault();
+            st.setActivePaneId(`pane-${idx}` as any);
+          }
+        }
       } else if (!isInput && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && key === 'f') {
         e.preventDefault();
         toggleChartFullscreen();

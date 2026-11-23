@@ -481,11 +481,12 @@ async def api_save_daily_note(req: DailyNoteRequest):
 async def websocket_stream(websocket: WebSocket):
     await websocket.accept()
     subscription: Dict[str, str] = {"symbol": "XAUUSD", "tf": "15m"}
+    extra_streams: List[Dict[str, str]] = []
     active = True
     last_cache_flush = time.time()
 
     async def receiver():
-        nonlocal active
+        nonlocal active, extra_streams
         try:
             while active:
                 raw = await websocket.receive_text()
@@ -493,7 +494,8 @@ async def websocket_stream(websocket: WebSocket):
                     msg = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                if msg.get("action") == "subscribe":
+                action = msg.get("action")
+                if action == "subscribe":
                     sym = msg.get("symbol")
                     tf = msg.get("tf")
                     if sym:
@@ -504,6 +506,28 @@ async def websocket_stream(websocket: WebSocket):
                         norm = normalize_tf_code(str(tf))
                         if norm and parse_tf_seconds(norm) is not None:
                             subscription["tf"] = norm
+                elif action == "subscribe_extra":
+                    raw_streams = msg.get("streams") or []
+                    resolved_list: List[Dict[str, str]] = []
+                    seen = set()
+                    for item in raw_streams[:6]:
+                        if not isinstance(item, dict):
+                            continue
+                        s_raw = item.get("symbol")
+                        tf_raw = item.get("tf")
+                        if not s_raw or not tf_raw:
+                            continue
+                        norm_tf = normalize_tf_code(str(tf_raw))
+                        if not norm_tf or parse_tf_seconds(norm_tf) is None:
+                            continue
+                        resolved_sym = await asyncio.to_thread(
+                            mt5_service.resolve_broker_symbol, str(s_raw)
+                        )
+                        key = (resolved_sym, norm_tf)
+                        if key not in seen:
+                            seen.add(key)
+                            resolved_list.append({"symbol": resolved_sym, "tf": norm_tf})
+                    extra_streams = resolved_list
         except WebSocketDisconnect:
             active = False
         except Exception:
@@ -526,6 +550,18 @@ async def websocket_stream(websocket: WebSocket):
                     await asyncio.to_thread(
                         cache_service.upsert_candles, sym, tf, [payload["candle"]]
                     )
+
+            # Broadcast ticks for active secondary panes in multi-chart layouts (Issue #1)
+            for ex in list(extra_streams):
+                ex_sym = ex["symbol"]
+                ex_tf = ex["tf"]
+                if ex_sym == sym and ex_tf == tf:
+                    continue
+                ex_payload = await asyncio.to_thread(
+                    mt5_service.get_live_tick_and_candle, ex_sym, ex_tf
+                )
+                if ex_payload:
+                    await websocket.send_json(ex_payload)
 
             # Broadcast live Account, Positions & Pending Orders every 1.0s
             if now - last_trade_push >= 1.0:

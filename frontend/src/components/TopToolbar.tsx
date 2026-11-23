@@ -61,6 +61,7 @@ export const TopToolbar: React.FC = () => {
     layoutMode,
     setLayoutMode,
     activePaneId,
+    setActivePaneId,
     secondaryPanes,
     syncSymbolAcrossPanes,
     toggleSyncSymbolAcrossPanes,
@@ -212,14 +213,43 @@ export const TopToolbar: React.FC = () => {
           <Search className="w-3.5 h-3.5 text-[#787b86]" />
           <span className="text-[13px]">{activeSymbol}</span>
           {layoutMode !== '1' && (
-            <span className="text-[9.5px] px-1 py-0.5 rounded bg-[#2962ff]/20 text-[#2962ff] font-mono-num">
-              {activePaneId.replace('pane-', 'P')}
+            <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-[#2962ff] text-white font-mono-num font-bold">
+              Pane {activePaneId.replace('pane-', '')} · {activeTimeframe}
             </span>
           )}
           <span className="text-[10px] px-1 py-0.5 rounded bg-[#131722] text-[#787b86] font-normal hidden xl:inline">
             {symbolInfo.category}
           </span>
         </button>
+
+        {/* Quick Pane Selector Pills in Multi-Chart Mode (Alt+1..4) */}
+        {layoutMode !== '1' && (
+          <div className="flex items-center gap-0.5 ml-1 px-1 py-0.5 rounded bg-[#131722] border border-[#2a2e39] shrink-0">
+            {(layoutMode === '4'
+              ? (['pane-1', 'pane-2', 'pane-3', 'pane-4'] as const)
+              : (['pane-1', 'pane-2'] as const)
+            ).map((pid, idx) => {
+              const pSym = pid === 'pane-1' ? symbol : secondaryPanes[pid]?.symbol || 'EURUSD';
+              const pTf = pid === 'pane-1' ? timeframe : secondaryPanes[pid]?.timeframe || '1h';
+              const active = activePaneId === pid;
+              return (
+                <button
+                  key={pid}
+                  type="button"
+                  onClick={() => setActivePaneId(pid)}
+                  title={`Focus Pane #${idx + 1} (${pSym} · ${pTf}) — Shortcut: Alt+${idx + 1}`}
+                  className={`px-1.5 h-[22px] rounded text-[10px] font-mono-num font-semibold transition-colors cursor-pointer ${
+                    active
+                      ? 'bg-[#2962ff] text-white'
+                      : 'text-[#787b86] hover:text-[#d1d4dc] hover:bg-[#2a2e39]'
+                  }`}
+                >
+                  P{idx + 1}
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         <div className="w-[1px] h-5 bg-[#2a2e39] mx-1 shrink-0" />
 
