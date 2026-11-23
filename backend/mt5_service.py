@@ -1767,9 +1767,8 @@ class MT5Service:
                 return {"success": True, "retcode": 10009, "order_ticket": req.ticket, "message": f"[MOCK] Modified #{req.ticket}"}
         return {"success": False, "retcode": -1, "order_ticket": req.ticket, "message": f"Ticket #{req.ticket} not found"}
 
-    def close_position(self, ticket: int) -> Dict[str, Any]:
-        with self._lock:
-            if self.connected and MT5_IMPORTED and mt5 is not None:
+    def _close_one(self, ticket: int) -> Dict[str, Any]:
+        if self.connected and MT5_IMPORTED and mt5 is not None:
                 positions = mt5.positions_get(ticket=int(ticket))
                 if not positions:
                     return {"success": False, "retcode": -1, "order_ticket": ticket, "message": f"Position #{ticket} not found."}
@@ -1830,6 +1829,16 @@ class MT5Service:
                 self._mock_positions.pop(idx)
                 return {"success": True, "retcode": 10009, "order_ticket": ticket, "message": f"[MOCK] Closed #{ticket}"}
         return {"success": False, "retcode": -1, "order_ticket": ticket, "message": f"Position #{ticket} not found"}
+
+    def close_position(self, ticket: int) -> Dict[str, Any]:
+        with self._lock:
+            return self._close_one(ticket)
+
+    def bulk_close_positions(self, tickets: List[int]) -> Tuple[bool, List[Dict[str, Any]], str]:
+        with self._lock:
+            results = [self._close_one(t) for t in tickets]
+        ok = sum(1 for r in results if r.get("success"))
+        return all(r.get("success") for r in results), results, f"{ok} closed, {len(results) - ok} failed"
 
     def cancel_pending_order(self, ticket: int) -> Dict[str, Any]:
         with self._lock:

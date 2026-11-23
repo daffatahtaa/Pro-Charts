@@ -168,6 +168,16 @@ class TradeResultResponse(BaseModel):
     executed_volume: float = 0.0
 
 
+class BulkCloseRequest(BaseModel):
+    tickets: list[int]
+
+
+class BulkResultResponse(BaseModel):
+    success: bool
+    results: list[TradeResultResponse]
+    message: str
+
+
 class MT5LoginRequest(BaseModel):
     login: int
     password: Optional[str] = None
