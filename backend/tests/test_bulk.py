@@ -122,15 +122,76 @@ def test_bulk_close_partial_failure():
 
 
 def test_bulk_modify_mixed_partial():
+    # Same symbol, opposite sides: one SL below current is valid for BUY, invalid for SELL
     t1 = _place("EURUSD", "BUY")
-    t2 = _place("GBPUSD", "SELL")
+    t2 = _place("EURUSD", "SELL")
     state = client.get("/api/mt5/trade/state").json()
     p1 = next(p for p in state["positions"] if p["ticket"] == t1)
     p2 = next(p for p in state["positions"] if p["ticket"] == t2)
-    # one SL below every current price: valid for the BUY, invalid for the SELL
     sl = round(min(p1["open_price"], p1["current_price"], p2["current_price"]) - 0.01, 5)
 
     res = client.post("/api/mt5/trade/bulk/modify", json={"tickets": [t1, t2], "sl": sl}).json()
     assert res["success"] is False and len(res["results"]) == 2
     assert res["results"][0]["success"] is True and res["results"][1]["success"] is False
     assert str(t2) in res["results"][1]["message"]
+
+
+def test_bulk_modify_rejects_mixed_symbols():
+    t_gold = _place("XAUUSD", "BUY")
+    t_fx = _place("EURUSD", "BUY")
+    before = client.get("/api/mt5/trade/state").json()["positions"]
+    gold_before = next(p for p in before if p["ticket"] == t_gold)
+    fx_before = next(p for p in before if p["ticket"] == t_fx)
+
+    res = client.post(
+        "/api/mt5/trade/bulk/modify",
+        json={"tickets": [t_gold, t_fx], "sl": round(gold_before["current_price"] - 10.0, 2)},
+    ).json()
+    assert res["success"] is False
+    assert "multiple symbols" in res["message"].lower()
+    assert all(not r["success"] for r in res["results"])
+
+    after = client.get("/api/mt5/trade/state").json()["positions"]
+    gold_after = next(p for p in after if p["ticket"] == t_gold)
+    fx_after = next(p for p in after if p["ticket"] == t_fx)
+    assert gold_after["sl"] == gold_before["sl"]
+    assert fx_after["sl"] == fx_before["sl"]
+
+
+def test_bulk_modify_rejects_expected_symbol_mismatch():
+    t_fx = _place("EURUSD", "BUY")
+    res = client.post(
+        "/api/mt5/trade/bulk/modify",
+        json={"tickets": [t_fx], "sl": 1.01, "symbol": "XAUUSD"},
+    ).json()
+    assert res["success"] is False
+    assert "mismatch" in res["message"].lower()
+
+
+def test_bulk_modify_rounds_sltp_to_symbol_digits():
+    t_gold = _place("XAUUSD", "BUY")
+    state = client.get("/api/mt5/trade/state").json()
+    pos = next(p for p in state["positions"] if p["ticket"] == t_gold)
+    assert pos["digits"] == 2
+    noisy_sl = round(pos["current_price"] - 10.0, 2) + 0.004294353796595
+    expected_sl = round(noisy_sl, 2)
+
+    res = client.post(
+        "/api/mt5/trade/bulk/modify",
+        json={"tickets": [t_gold], "sl": noisy_sl, "symbol": "XAUUSD"},
+    ).json()
+    assert res["success"] is True
+    after = client.get("/api/mt5/trade/state").json()
+    updated = next(p for p in after["positions"] if p["ticket"] == t_gold)
+    assert updated["sl"] == expected_sl
+
+
+def test_trade_state_includes_symbol_digits():
+    t_gold = _place("XAUUSD", "BUY")
+    t_eur = _place("EURUSD", "BUY")
+    t_jpy = _place("USDJPY", "BUY")
+    state = client.get("/api/mt5/trade/state").json()
+    by_ticket = {p["ticket"]: p for p in state["positions"]}
+    assert by_ticket[t_gold]["digits"] == 2
+    assert by_ticket[t_eur]["digits"] == 5
+    assert by_ticket[t_jpy]["digits"] == 3

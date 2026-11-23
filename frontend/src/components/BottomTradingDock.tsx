@@ -12,11 +12,19 @@ import {
 import { api } from '../services/api';
 import { useChartStore } from '../store/useChartStore';
 import { PositionItem, BulkTradeResult } from '../types/chart';
-import { BulkSlTpEditor } from './BulkSlTpEditor';
+import { BulkSlTpEditor, BulkSymbolMeta } from './BulkSlTpEditor';
+import {
+  formatSignedMoney,
+  formatTradePrice,
+  resolveSymbolDigits,
+  resolveSymbolPoint,
+} from '../utils/formatPrice';
 
 export const BottomTradingDock: React.FC = () => {
   const {
     symbol,
+    symbolInfo,
+    watchlistTicks,
     setSymbol,
     account,
     positions,
@@ -112,13 +120,81 @@ export const BottomTradingDock: React.FC = () => {
     : account?.profit ?? 0;
 
   const uniqueSymbols = Array.from(new Set(positions.map((p) => p.symbol))).sort();
-  const bulkTargetTickets = (): number[] => {
-    if (bulkScope === 'pair') return positions.filter((p) => p.symbol === bulkPairFilter).map((p) => p.ticket);
-    if (bulkScope === 'selected')
+  const effectivePairFilter =
+    bulkPairFilter && uniqueSymbols.includes(bulkPairFilter)
+      ? bulkPairFilter
+      : uniqueSymbols.includes(symbol)
+      ? symbol
+      : uniqueSymbols[0] || '';
+
+  const getDigitsFor = (sym: string, explicitDigits?: number | null) =>
+    resolveSymbolDigits(sym, explicitDigits, symbol, symbolInfo.digits, watchlistTicks);
+
+  // Bulk Close targets honor All / Pair / Selected freely
+  const bulkCloseTickets = (): number[] => {
+    if (bulkScope === 'pair') {
+      return positions.filter((p) => p.symbol === effectivePairFilter).map((p) => p.ticket);
+    }
+    if (bulkScope === 'selected') {
       return selectedTickets.filter((t) => positions.some((p) => p.ticket === t));
+    }
     return positions.map((p) => p.ticket);
   };
-  const bulkCount = bulkTargetTickets().length;
+  const bulkCloseCount = bulkCloseTickets().length;
+
+  // Bulk Set SL/TP always scopes to a single symbol (never applies one absolute price across pairs)
+  const slTpScopedPositions = React.useMemo(() => {
+    if (isPaper) return [];
+    if (bulkScope === 'pair') {
+      return positions.filter((p) => p.symbol === effectivePairFilter);
+    }
+    if (bulkScope === 'selected') {
+      return positions.filter((p) => selectedTickets.includes(p.ticket));
+    }
+    return positions;
+  }, [isPaper, bulkScope, effectivePairFilter, positions, selectedTickets]);
+
+  const bulkEditorSymbols = React.useMemo(() => {
+    if (isPaper) {
+      return Array.from(new Set(paperOpen.map((t) => t.symbol))).sort();
+    }
+    return Array.from(new Set(slTpScopedPositions.map((p) => p.symbol))).sort();
+  }, [isPaper, paperOpen, slTpScopedPositions]);
+
+  const bulkEditorPositionsBySymbol = React.useMemo<Record<string, BulkSymbolMeta>>(() => {
+    const map: Record<string, BulkSymbolMeta> = {};
+    if (isPaper) {
+      for (const tr of paperOpen) {
+        if (!map[tr.symbol]) {
+          const d = getDigitsFor(tr.symbol);
+          map[tr.symbol] = { count: 0, digits: d, point: resolveSymbolPoint(d) };
+        }
+        map[tr.symbol].count += 1;
+      }
+    } else {
+      for (const p of slTpScopedPositions) {
+        if (!map[p.symbol]) {
+          const d = getDigitsFor(p.symbol, p.digits);
+          map[p.symbol] = { count: 0, digits: d, point: resolveSymbolPoint(d) };
+        }
+        map[p.symbol].count += 1;
+      }
+    }
+    return map;
+  }, [isPaper, paperOpen, slTpScopedPositions, symbol, symbolInfo.digits, watchlistTicks]);
+
+  const bulkEditorInitialSymbol = React.useMemo(() => {
+    if (bulkScope === 'pair' && effectivePairFilter && bulkEditorPositionsBySymbol[effectivePairFilter]) {
+      return effectivePairFilter;
+    }
+    if (bulkEditorPositionsBySymbol[symbol]) return symbol;
+    return bulkEditorSymbols[0] || '';
+  }, [bulkScope, effectivePairFilter, symbol, bulkEditorSymbols, bulkEditorPositionsBySymbol]);
+
+  const bulkSlTpCount = bulkEditorInitialSymbol
+    ? bulkEditorPositionsBySymbol[bulkEditorInitialSymbol]?.count ?? 0
+    : 0;
+  const bulkCount = bulkCloseCount;
 
   const toggleAllVisible = () => {
     const allSelected = positions.every((p) => selectedTickets.includes(p.ticket));
@@ -135,15 +211,22 @@ export const BottomTradingDock: React.FC = () => {
     return `${res.message} — ${detail}${fails.length > 2 ? ` (+${fails.length - 2} more)` : ''}`;
   };
 
-  const handleBulkApply = async (sl?: number, tp?: number) => {
+  const handleBulkApply = async (targetSymbol: string, sl?: number, tp?: number) => {
     setBulkBusy(true);
     try {
       if (isPaper) {
-        const ids = paperOpen.map((t) => t.id);
+        const ids = paperOpen.filter((t) => t.symbol === targetSymbol).map((t) => t.id);
         bulkPaperModify(ids, { sl, tp });
-        showToast('success', `Bulk SL/TP applied to ${ids.length} paper trade(s)`);
+        showToast('success', `Bulk SL/TP applied to ${ids.length} ${targetSymbol} paper trade(s)`);
       } else {
-        const res = await api.bulkModifyTrade({ tickets: bulkTargetTickets(), sl, tp });
+        const tickets = slTpScopedPositions
+          .filter((p) => p.symbol === targetSymbol)
+          .map((p) => p.ticket);
+        if (tickets.length === 0) {
+          showToast('error', `No open positions for ${targetSymbol}`);
+          return;
+        }
+        const res = await api.bulkModifyTrade({ tickets, sl, tp, symbol: targetSymbol });
         showToast(res.success ? 'success' : 'error', summarizeBulk(res));
         await refreshTradeState();
       }
@@ -156,7 +239,11 @@ export const BottomTradingDock: React.FC = () => {
   };
 
   const scopeLabel =
-    bulkScope === 'all' ? 'All positions' : bulkScope === 'pair' ? bulkPairFilter : 'Selected positions';
+    bulkScope === 'all'
+      ? 'All positions'
+      : bulkScope === 'pair'
+      ? effectivePairFilter || 'Pair'
+      : 'Selected positions';
 
   const handleBulkClose = async () => {
     setBulkBusy(true);
@@ -165,7 +252,7 @@ export const BottomTradingDock: React.FC = () => {
       if (isPaper) {
         bulkPaperClose(paperOpen.map((t) => t.id));
       } else {
-        const res = await api.bulkClosePosition(bulkTargetTickets());
+        const res = await api.bulkClosePosition(bulkCloseTickets());
         showToast(res.success ? 'success' : 'error', summarizeBulk(res));
         await refreshTradeState();
       }
@@ -351,12 +438,14 @@ export const BottomTradingDock: React.FC = () => {
                           <td className="py-1.5 px-2 font-sans text-[#f59e0b]">
                             {tr.strategy_tag || '-'}
                           </td>
-                          <td className="py-1.5 px-2 text-right text-[#d1d4dc]">{tr.entry_price}</td>
+                          <td className="py-1.5 px-2 text-right text-[#d1d4dc]">
+                            {formatTradePrice(tr.entry_price, getDigitsFor(tr.symbol))}
+                          </td>
                           <td className="py-1.5 px-2 text-right text-[#f23645]">
-                            {tr.sl > 0 ? tr.sl : '—'}
+                            {formatTradePrice(tr.sl, getDigitsFor(tr.symbol))}
                           </td>
                           <td className="py-1.5 px-2 text-right text-[#089981]">
-                            {tr.tp > 0 ? tr.tp : '—'}
+                            {formatTradePrice(tr.tp, getDigitsFor(tr.symbol))}
                           </td>
                           <td className="py-1.5 px-2 text-right text-[#787b86]">
                             <span className="text-[#089981]">{tr.mfe_pips}p</span> /{' '}
@@ -367,8 +456,7 @@ export const BottomTradingDock: React.FC = () => {
                               isProfit ? 'text-[#089981]' : 'text-[#f23645]'
                             }`}
                           >
-                            {isProfit ? '+' : ''}
-                            {tr.pnl_money.toFixed(2)} ({tr.realized_r >= 0 ? '+' : ''}
+                            {formatSignedMoney(tr.pnl_money)} ({tr.realized_r >= 0 ? '+' : ''}
                             {tr.realized_r.toFixed(2)}R)
                           </td>
                           <td className="py-1.5 px-3 text-right">
@@ -422,12 +510,14 @@ export const BottomTradingDock: React.FC = () => {
                       <td className="py-1.5 px-2 font-sans text-[#f59e0b]">
                         {tr.strategy_tag || '-'}
                       </td>
-                      <td className="py-1.5 px-2 text-right text-[#d1d4dc]">{tr.entry_price}</td>
+                      <td className="py-1.5 px-2 text-right text-[#d1d4dc]">
+                        {formatTradePrice(tr.entry_price, getDigitsFor(tr.symbol))}
+                      </td>
                       <td className="py-1.5 px-2 text-right text-[#f23645]">
-                        {tr.sl > 0 ? tr.sl : '—'}
+                        {formatTradePrice(tr.sl, getDigitsFor(tr.symbol))}
                       </td>
                       <td className="py-1.5 px-2 text-right text-[#089981]">
-                        {tr.tp > 0 ? tr.tp : '—'}
+                        {formatTradePrice(tr.tp, getDigitsFor(tr.symbol))}
                       </td>
                       <td className="py-1.5 px-3 text-right">
                         <button
@@ -469,7 +559,7 @@ export const BottomTradingDock: React.FC = () => {
                 </div>
                 {bulkScope === 'pair' && (
                   <select
-                    value={bulkPairFilter}
+                    value={effectivePairFilter}
                     onChange={(e) => setBulkPairFilter(e.target.value)}
                     className="bg-[#131722] border border-[#2a2e39] rounded text-[10.5px] font-sans text-[#d1d4dc] px-1.5 py-0.5"
                   >
@@ -480,10 +570,15 @@ export const BottomTradingDock: React.FC = () => {
                 )}
                 <button
                   onClick={() => setBulkEditorOpen(true)}
-                  disabled={bulkCount === 0 || bulkBusy}
+                  disabled={bulkEditorSymbols.length === 0 || bulkBusy}
+                  title={
+                    bulkEditorSymbols.length > 1
+                      ? `Choose a single symbol (${bulkEditorSymbols.join(', ')}) to set SL/TP safely`
+                      : `Set SL/TP for ${bulkEditorInitialSymbol}`
+                  }
                   className="px-2 py-0.5 rounded bg-[#2962ff]/15 hover:bg-[#2962ff]/30 text-[#2962ff] text-[10.5px] font-sans font-semibold disabled:opacity-40"
                 >
-                  Set SL/TP ({bulkCount})
+                  Set SL/TP ({bulkEditorSymbols.length === 1 ? `${bulkEditorInitialSymbol}: ${bulkSlTpCount}` : bulkCount})
                 </button>
                 <button
                   onClick={() => setBulkConfirmOpen(true)}
@@ -559,24 +654,23 @@ export const BottomTradingDock: React.FC = () => {
                           {pos.volume.toFixed(2)}
                         </td>
                         <td className="py-1.5 px-2 text-right text-[#d1d4dc]">
-                          {pos.open_price}
+                          {formatTradePrice(pos.open_price, getDigitsFor(pos.symbol, pos.digits))}
                         </td>
                         <td className="py-1.5 px-2 text-right text-[#f23645]">
-                          {pos.sl > 0 ? pos.sl : '—'}
+                          {formatTradePrice(pos.sl, getDigitsFor(pos.symbol, pos.digits))}
                         </td>
                         <td className="py-1.5 px-2 text-right text-[#089981]">
-                          {pos.tp > 0 ? pos.tp : '—'}
+                          {formatTradePrice(pos.tp, getDigitsFor(pos.symbol, pos.digits))}
                         </td>
                         <td className="py-1.5 px-2 text-right text-[#d1d4dc]">
-                          {pos.current_price}
+                          {formatTradePrice(pos.current_price, getDigitsFor(pos.symbol, pos.digits))}
                         </td>
                         <td
                           className={`py-1.5 px-2 text-right font-semibold ${
                             isProfit ? 'text-[#089981]' : 'text-[#f23645]'
                           }`}
                         >
-                          {isProfit ? '+' : ''}
-                          {pos.profit.toFixed(2)}
+                          {formatSignedMoney(pos.profit)}
                         </td>
                         <td
                           className="py-1.5 px-3 text-right"
@@ -660,16 +754,16 @@ export const BottomTradingDock: React.FC = () => {
                         {ord.volume.toFixed(2)}
                       </td>
                       <td className="py-1.5 px-2 text-right text-[#d1d4dc]">
-                        {ord.price_open}
+                        {formatTradePrice(ord.price_open, getDigitsFor(ord.symbol, ord.digits))}
                       </td>
                       <td className="py-1.5 px-2 text-right text-[#f23645]">
-                        {ord.sl > 0 ? ord.sl : '—'}
+                        {formatTradePrice(ord.sl, getDigitsFor(ord.symbol, ord.digits))}
                       </td>
                       <td className="py-1.5 px-2 text-right text-[#089981]">
-                        {ord.tp > 0 ? ord.tp : '—'}
+                        {formatTradePrice(ord.tp, getDigitsFor(ord.symbol, ord.digits))}
                       </td>
                       <td className="py-1.5 px-2 text-right text-[#787b86]">
-                        {ord.current_price}
+                        {formatTradePrice(ord.current_price, getDigitsFor(ord.symbol, ord.digits))}
                       </td>
                       <td
                         className="py-1.5 px-3 text-right"
@@ -731,7 +825,10 @@ export const BottomTradingDock: React.FC = () => {
 
       {bulkEditorOpen && (
         <BulkSlTpEditor
-          count={isPaper ? paperOpen.length : bulkCount}
+          symbols={bulkEditorSymbols}
+          initialSymbol={bulkEditorInitialSymbol}
+          positionsBySymbol={bulkEditorPositionsBySymbol}
+          isMixedScope={!isPaper && bulkEditorSymbols.length > 1}
           onApply={handleBulkApply}
           onClose={() => setBulkEditorOpen(false)}
         />

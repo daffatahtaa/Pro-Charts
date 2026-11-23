@@ -296,6 +296,7 @@ export interface PositionItem {
   swap: number;
   open_time_ms: number;
   comment: string;
+  digits?: number;
 }
 
 export interface PendingOrderItem {
@@ -309,6 +310,7 @@ export interface PendingOrderItem {
   tp: number;
   setup_time_ms: number;
   comment: string;
+  digits?: number;
 }
 
 export interface TradeStatePayload {
@@ -342,6 +344,7 @@ export interface BulkModifyPayload {
   tickets: number[];
   sl?: number;
   tp?: number;
+  symbol?: string;
 }
 
 export interface BulkTradeResult {

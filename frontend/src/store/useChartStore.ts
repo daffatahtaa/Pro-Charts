@@ -465,7 +465,7 @@ interface ChartStore {
   registerBridge: (bridge: ChartActionsBridge) => void;
 }
 
-const DEFAULT_WATCHLIST = [
+const LEGACY_DEFAULT_WATCHLIST = [
   '###SECTION:IC MARKETS / STANDARD',
   'XAUUSD',
   'EURUSD',
@@ -480,6 +480,37 @@ const DEFAULT_WATCHLIST = [
   'NAS100',
   'BTCUSD',
 ];
+
+const DEFAULT_WATCHLIST = [
+  'XAUUSD',
+  'EURUSD',
+  'GBPUSD',
+  'USDJPY',
+  'AUDUSD',
+  'USDCAD',
+  'US30',
+  'NAS100',
+  'BTCUSD',
+];
+
+function loadInitialWatchlist(): string[] {
+  try {
+    const raw = localStorage.getItem(LS_WATCHLIST_KEY);
+    if (!raw) return [...DEFAULT_WATCHLIST];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return [...DEFAULT_WATCHLIST];
+    if (
+      parsed.length === LEGACY_DEFAULT_WATCHLIST.length &&
+      parsed.every((item, idx) => item === LEGACY_DEFAULT_WATCHLIST[idx])
+    ) {
+      localStorage.setItem(LS_WATCHLIST_KEY, JSON.stringify(DEFAULT_WATCHLIST));
+      return [...DEFAULT_WATCHLIST];
+    }
+    return parsed;
+  } catch {
+    return [...DEFAULT_WATCHLIST];
+  }
+}
 
 export const useChartStore = create<ChartStore>((set, get) => ({
   symbol: 'XAUUSD',
@@ -537,7 +568,7 @@ export const useChartStore = create<ChartStore>((set, get) => ({
     ...DEFAULT_SECONDARY_PANES,
   }),
   rightSidebarTab: 'watchlist',
-  watchlistSymbols: loadLSArray(LS_WATCHLIST_KEY, DEFAULT_WATCHLIST),
+  watchlistSymbols: loadInitialWatchlist(),
   collapsedSections: {},
   watchlistVisible: true,
   isChartFullscreen: false,
@@ -2199,7 +2230,7 @@ export const useChartStore = create<ChartStore>((set, get) => ({
     get().syncPaperBacktest();
   },
 
-  bulkScope: 'all',
+  bulkScope: 'pair',
   bulkPairFilter: '',
   selectedTickets: [],
   setBulkScope: (s) => set({ bulkScope: s }),

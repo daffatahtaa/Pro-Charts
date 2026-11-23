@@ -1380,6 +1380,17 @@ class MT5Service:
                     "trade_allowed": trade_allowed,
                 }
 
+                sym_digits_cache: Dict[str, int] = {}
+
+                def _resolve_live_digits(sym: str) -> int:
+                    if sym not in sym_digits_cache:
+                        s_info = mt5.symbol_info(sym)
+                        if s_info is not None and getattr(s_info, "digits", None) is not None:
+                            sym_digits_cache[sym] = int(s_info.digits)
+                        else:
+                            sym_digits_cache[sym] = int(self.get_symbol_spec(sym)["digits"])
+                    return sym_digits_cache[sym]
+
                 raw_pos = mt5.positions_get() or []
                 positions: List[Dict[str, Any]] = []
                 for p in raw_pos:
@@ -1398,6 +1409,7 @@ class MT5Service:
                             "swap": round(float(p.swap), 2),
                             "open_time_ms": int(p.time_msc) if getattr(p, "time_msc", 0) else int(p.time) * 1000,
                             "comment": p.comment or "",
+                            "digits": _resolve_live_digits(p.symbol),
                         }
                     )
 
@@ -1416,6 +1428,7 @@ class MT5Service:
                             "tp": float(o.tp),
                             "setup_time_ms": int(o.time_setup_msc) if getattr(o, "time_setup_msc", 0) else int(o.time_setup) * 1000,
                             "comment": o.comment or "",
+                            "digits": _resolve_live_digits(o.symbol),
                         }
                     )
 
@@ -1432,7 +1445,9 @@ class MT5Service:
             total_pnl += pnl
             mp["current_price"] = cur
             mp["profit"] = pnl
-            mock_pos_out.append(dict(mp))
+            out_item = dict(mp)
+            out_item["digits"] = int(self.get_symbol_spec(mp["symbol"])["digits"])
+            mock_pos_out.append(out_item)
 
         return {
             "account": {
@@ -1787,9 +1802,15 @@ class MT5Service:
                 return f"Invalid TP ({tp}) for SELL position: TP must be below current price ({current_price})"
         return None
 
-    def bulk_modify_sltp(self, tickets: List[int], sl: Optional[float], tp: Optional[float]) -> Tuple[bool, List[Dict[str, Any]], str]:
+    def bulk_modify_sltp(
+        self,
+        tickets: List[int],
+        sl: Optional[float],
+        tp: Optional[float],
+        expected_symbol: Optional[str] = None,
+    ) -> Tuple[bool, List[Dict[str, Any]], str]:
         with self._lock:
-            results: List[Dict[str, Any]] = []
+            resolved_entries: List[Tuple[int, Optional[Dict[str, Any]]]] = []
             for t in tickets:
                 pos: Optional[Dict[str, Any]] = None
                 if self.connected and MT5_IMPORTED and mt5 is not None:
@@ -1816,20 +1837,67 @@ class MT5Service:
                                 "tp": float(mp["tp"]),
                             }
                             break
+                resolved_entries.append((t, pos))
+
+            # Cross-symbol safety guard: never apply an absolute SL/TP price across mixed symbols
+            distinct_symbols = sorted({pos["symbol"] for _, pos in resolved_entries if pos is not None})
+            has_absolute_price = (sl is not None and sl != 0) or (tp is not None and tp != 0)
+            if has_absolute_price and len(distinct_symbols) > 1:
+                err_msg = (
+                    f"Cannot apply a single absolute SL/TP price across multiple symbols "
+                    f"({', '.join(distinct_symbols)}). Please select a single symbol."
+                )
+                results = [
+                    {"success": False, "retcode": 10015, "order_ticket": t, "message": err_msg}
+                    for t, _ in resolved_entries
+                ]
+                return False, results, err_msg
+
+            if expected_symbol and any(
+                pos is not None and pos["symbol"] != expected_symbol
+                for _, pos in resolved_entries
+            ):
+                err_msg = (
+                    f"Symbol mismatch: expected {expected_symbol}, "
+                    f"but batch contains {', '.join(distinct_symbols)}."
+                )
+                results = [
+                    {"success": False, "retcode": 10015, "order_ticket": t, "message": err_msg}
+                    for t, _ in resolved_entries
+                ]
+                return False, results, err_msg
+
+            digits_cache: Dict[str, int] = {}
+
+            def _get_digits(sym: str) -> int:
+                if sym not in digits_cache:
+                    if self.connected and MT5_IMPORTED and mt5 is not None:
+                        s_info = mt5.symbol_info(sym)
+                        if s_info is not None and getattr(s_info, "digits", None) is not None:
+                            digits_cache[sym] = int(s_info.digits)
+                            return digits_cache[sym]
+                    digits_cache[sym] = int(self.get_symbol_spec(sym)["digits"])
+                return digits_cache[sym]
+
+            results: List[Dict[str, Any]] = []
+            for t, pos in resolved_entries:
                 if pos is None:
                     results.append({"success": False, "retcode": -1, "order_ticket": t, "message": f"Position #{t} not found"})
                     continue
+                digits = _get_digits(pos["symbol"])
+                norm_sl = round(float(sl), digits) if (sl is not None and sl != 0) else sl
+                norm_tp = round(float(tp), digits) if (tp is not None and tp != 0) else tp
                 cur = float(pos["current_price"])
                 if self.connected and MT5_IMPORTED and mt5 is not None:
                     tick = mt5.symbol_info_tick(pos["symbol"])
                     if tick is not None:
                         cur = float(tick.bid if pos["side"] == "BUY" else tick.ask)
-                err = self._validate_sltp(pos["side"], cur, sl, tp)
+                err = self._validate_sltp(pos["side"], cur, norm_sl, norm_tp)
                 if err:
                     results.append({"success": False, "retcode": 10015, "order_ticket": t, "message": f"#{t}: {err}"})
                     continue
-                eff_sl = sl if sl is not None else pos["sl"]
-                eff_tp = tp if tp is not None else pos["tp"]
+                eff_sl = norm_sl if norm_sl is not None else pos["sl"]
+                eff_tp = norm_tp if norm_tp is not None else pos["tp"]
                 req = ModifyPositionRequest(ticket=t, symbol=pos["symbol"], sl=eff_sl, tp=eff_tp, is_pending=False)
                 results.append(self._modify_one(req))
         ok = sum(1 for r in results if r.get("success"))

@@ -123,6 +123,7 @@ class PositionItem(BaseModel):
     swap: float = 0.0
     open_time_ms: int
     comment: str = ""
+    digits: Optional[int] = None
 
 
 class PendingOrderItem(BaseModel):
@@ -136,6 +137,7 @@ class PendingOrderItem(BaseModel):
     tp: float = 0.0
     setup_time_ms: int
     comment: str = ""
+    digits: Optional[int] = None
 
 
 class PlaceOrderRequest(BaseModel):
@@ -176,6 +178,7 @@ class BulkModifyRequest(BaseModel):
     tickets: list[int]
     sl: Optional[float] = None  # None = keep current, 0.0 = clear
     tp: Optional[float] = None
+    symbol: Optional[str] = None  # Expected single target symbol guard
 
 
 class BulkResultResponse(BaseModel):

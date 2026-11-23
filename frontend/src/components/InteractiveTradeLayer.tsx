@@ -5,6 +5,7 @@ import { api } from '../services/api';
 import { unlockAudio } from '../services/sound';
 import { useChartStore } from '../store/useChartStore';
 import { PriceAlertItem } from '../types/chart';
+import { formatTradePrice, formatUnsignedMoney } from '../utils/formatPrice';
 
 export interface ActivePositionEditor {
   key: string;
@@ -119,14 +120,21 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
   dragStateRef.current = dragState;
 
   // Bulk drag targets: active only when the dock has an explicit bulk scope
-  // (pair or selected). Scope 'all' keeps single-trade drag behavior.
+  // (pair or selected), ALWAYS restricted to the active chart symbol so dragging
+  // SL/TP on one pair can never overwrite another symbol's positions!
   const bulkTargets = React.useMemo(() => {
-    if (bulkScope === 'pair' && bulkPairFilter)
-      return positions.filter((p) => p.symbol === bulkPairFilter).map((p) => p.ticket);
-    if (bulkScope === 'selected')
-      return selectedTickets.filter((t) => positions.some((p) => p.ticket === t));
+    if (bulkScope === 'pair') {
+      const targetPair = bulkPairFilter || symbol;
+      if (targetPair !== symbol) return [];
+      return positions.filter((p) => p.symbol === symbol).map((p) => p.ticket);
+    }
+    if (bulkScope === 'selected') {
+      return selectedTickets.filter((t) =>
+        positions.some((p) => p.ticket === t && p.symbol === symbol)
+      );
+    }
     return [];
-  }, [bulkScope, bulkPairFilter, selectedTickets, positions]);
+  }, [bulkScope, bulkPairFilter, selectedTickets, positions, symbol]);
   const bulkTargetsRef = useRef<number[]>([]);
   bulkTargetsRef.current = bulkTargets;
   const wasSelectedBeforeDownRef = useRef<boolean>(false);
@@ -382,15 +390,18 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
           }
         } else {
           const targets = bulkTargetsRef.current;
-          // Guard: only bulk-apply when the dragged trade itself is in the target set
+          // Guard: only bulk-apply when the dragged trade itself is in the same-symbol target set
           if (targets.length > 0 && targets.includes(Number(tr.id))) {
             try {
-              const payload: { tickets: number[]; sl?: number; tp?: number } = { tickets: targets };
-              if (cur.kind === 'sl') payload.sl = newSl;
-              if (cur.kind === 'tp') payload.tp = newTp;
+              const payload: { tickets: number[]; sl?: number; tp?: number; symbol: string } = {
+                tickets: targets,
+                symbol: tr.symbol,
+              };
+              if (cur.kind === 'sl') payload.sl = Number(newSl.toFixed(digits));
+              if (cur.kind === 'tp') payload.tp = Number(newTp.toFixed(digits));
               const res = await api.bulkModifyTrade(payload);
               if (res.success) {
-                showToast('success', `Bulk updated ${targets.length} position(s)`);
+                showToast('success', `Bulk updated ${targets.length} ${tr.symbol} position(s)`);
                 await refreshTradeState();
               } else {
                 const fails = res.results.filter((r) => !r.success);
@@ -416,7 +427,7 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
         });
         showToast(
           'success',
-          `Updated Paper ${tr.side} (${tr.isPending ? `Entry ${newEntry.toFixed(digits)} | ` : ''}SL ${newSl > 0 ? newSl.toFixed(digits) : '—'} | TP ${newTp > 0 ? newTp.toFixed(digits) : '—'})`
+          `Updated Paper ${tr.side} (${tr.isPending ? `Entry ${formatTradePrice(newEntry, digits)} | ` : ''}SL ${formatTradePrice(newSl, digits)} | TP ${formatTradePrice(newTp, digits)})`
         );
         return;
       }
@@ -433,7 +444,7 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
         if (res.success) {
           showToast(
             'success',
-            `Updated #${tr.id}: ${tr.isPending ? `Entry ${newEntry.toFixed(digits)} | ` : ''}SL ${newSl > 0 ? newSl.toFixed(digits) : '—'} | TP ${newTp > 0 ? newTp.toFixed(digits) : '—'}`
+            `Updated #${tr.id}: ${tr.isPending ? `Entry ${formatTradePrice(newEntry, digits)} | ` : ''}SL ${formatTradePrice(newSl, digits)} | TP ${formatTradePrice(newTp, digits)}`
           );
           await refreshTradeState();
         } else {
@@ -673,8 +684,8 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
 
         // Rough dollar estimate per pip based on volume (fallback visual guide)
         const estPerPip = tr.volume * 10;
-        const estLoss = (parseFloat(slPips) * estPerPip).toFixed(2);
-        const estProfit = (parseFloat(tpPips) * estPerPip).toFixed(2);
+        const estLoss = formatUnsignedMoney(parseFloat(slPips) * estPerPip, 2);
+        const estProfit = formatUnsignedMoney(parseFloat(tpPips) * estPerPip, 2);
 
         return (
           <React.Fragment key={tr.key}>
@@ -717,7 +728,7 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
                 <div className="absolute right-7 flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-[#089981] text-white font-mono-num text-[10.5px] font-bold shadow-tv whitespace-nowrap select-none">
                   <ArrowUpDown className="w-3 h-3 opacity-85 shrink-0" />
                   <span>
-                    TP: {effTp.toFixed(digits)} (+{tpPips}p | ~+${estProfit}
+                    TP: {formatTradePrice(effTp, digits)} (+{tpPips}p | ~+${estProfit}
                     {rr ? ` | R:R 1:${rr}` : ''})
                   </span>
                 </div>
@@ -739,7 +750,7 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
                 <div className="absolute right-7 flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-[#f23645] text-white font-mono-num text-[10.5px] font-bold shadow-tv whitespace-nowrap select-none">
                   <ArrowUpDown className="w-3 h-3 opacity-85 shrink-0" />
                   <span>
-                    SL: {effSl.toFixed(digits)} (-{slPips}p | ~-${estLoss})
+                    SL: {formatTradePrice(effSl, digits)} (-{slPips}p | ~-${estLoss})
                   </span>
                 </div>
               </div>
@@ -849,12 +860,12 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
                   {tr.isPending ? (
                     <span>
                       {tr.orderType.replace('_', ' ')} {tr.volume.toFixed(2)} @{' '}
-                      {effEntry.toFixed(digits)}
+                      {formatTradePrice(effEntry, digits)}
                     </span>
                   ) : (
                     <span>
                       {tr.side} {tr.volume.toFixed(2)} | {tr.profit >= 0 ? '+' : '-'}$
-                      {Math.abs(tr.profit).toFixed(2)}
+                      {formatUnsignedMoney(tr.profit, 2)}
                     </span>
                   )}
 
@@ -924,7 +935,7 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
                   <Bell className={`w-3 h-3 shrink-0 ${isTriggered ? 'text-[#f59e0b]' : ''}`} />
                   <span>
                     {isTriggered ? 'TRIGGERED · ' : ''}
-                    {effPrice.toFixed(digits)}
+                    {formatTradePrice(effPrice, digits)}
                     {alert.note ? ` · ${alert.note}` : ''}
                   </span>
                   {isTriggered && (
@@ -998,13 +1009,13 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
             style={{ top: `${hoverCursor.y}px`, right: `${yAxisWidth + 2}px` }}
           >
             <span className="hidden group-hover:inline-block mr-1 px-1.5 py-0.5 rounded bg-[#1e222d] border border-[#2a2e39] text-[#d1d4dc] font-mono-num text-[10px] whitespace-nowrap shadow-tv">
-              + Alert @ {hoverCursor.price.toFixed(digits)}
+              + Alert @ {formatTradePrice(hoverCursor.price, digits)}
             </span>
             <button
               type="button"
               onMouseDown={(e) => e.stopPropagation()}
               onClick={handleQuickAddAlert}
-              title={`Add Price Alert @ ${hoverCursor.price.toFixed(digits)}`}
+              title={`Add Price Alert @ ${formatTradePrice(hoverCursor.price, digits)}`}
               className="w-[18px] h-[18px] rounded-[3px] bg-[#2a2e39] hover:bg-[#2962ff] border border-[#363a45] text-[#d1d4dc] hover:text-white flex items-center justify-center shadow-sm transition-colors cursor-pointer"
             >
               <Plus className="w-3 h-3" />

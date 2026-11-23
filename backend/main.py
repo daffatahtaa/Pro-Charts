@@ -140,7 +140,9 @@ async def bulk_close_trade_positions(req: BulkCloseRequest):
 async def bulk_modify_trade_positions(req: BulkModifyRequest):
     if not req.tickets:
         raise HTTPException(status_code=400, detail="tickets must not be empty")
-    success, results, message = await asyncio.to_thread(mt5_service.bulk_modify_sltp, req.tickets, req.sl, req.tp)
+    success, results, message = await asyncio.to_thread(
+        mt5_service.bulk_modify_sltp, req.tickets, req.sl, req.tp, req.symbol
+    )
     return BulkResultResponse(success=success, results=results, message=message)
 
 
