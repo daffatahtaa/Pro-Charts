@@ -195,6 +195,28 @@ export const DrawingFloatingBar: React.FC = () => {
 
           <div className="w-[1px] h-4 bg-[#2a2e39]" />
 
+          {/* Batch Opacity */}
+          <div className="flex items-center gap-1 px-1" title="Opacity for all selected drawings">
+            <span className="text-[10px] text-[#787b86]">α</span>
+            <input
+              type="range"
+              min={10}
+              max={100}
+              step={5}
+              defaultValue={Math.round(
+                ((selectedItems[0]?.extendData as any)?.opacity ?? 1) * 100
+              )}
+              onChange={(e) =>
+                bridge.updateMultipleOverlaysStyle?.(selectedOverlayIds, {
+                  opacity: Number(e.target.value) / 100,
+                })
+              }
+              className="w-14 accent-[#2962ff] cursor-pointer"
+            />
+          </div>
+
+          <div className="w-[1px] h-4 bg-[#2a2e39]" />
+
           {/* Batch Lock / Unlock */}
           <button
             onClick={() =>
@@ -226,8 +248,13 @@ export const DrawingFloatingBar: React.FC = () => {
           {/* Batch Delete */}
           <button
             onClick={() => bridge.deleteMultipleOverlays?.(selectedOverlayIds)}
-            title="Delete Selected Drawings (Del)"
-            className="p-1 rounded text-[#f23645] hover:bg-[#f23645]/15 cursor-pointer"
+            disabled={allLocked}
+            title={allLocked ? 'Unlock drawings to delete' : 'Delete Selected Drawings (Del)'}
+            className={`p-1 rounded ${
+              allLocked
+                ? 'text-[#787b86] opacity-40 cursor-not-allowed'
+                : 'text-[#f23645] hover:bg-[#f23645]/15 cursor-pointer'
+            }`}
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
@@ -453,6 +480,32 @@ export const DrawingFloatingBar: React.FC = () => {
           )}
         </div>
 
+        {/* Quick Opacity */}
+        <div
+          className="flex items-center gap-1 px-1"
+          title={`Opacity: ${Math.round((selectedOverlay.opacity ?? (singleDrawing?.extendData as any)?.opacity ?? 1) * 100)}%`}
+        >
+          <input
+            type="range"
+            min={10}
+            max={100}
+            step={5}
+            value={Math.round(
+              (selectedOverlay.opacity ?? (singleDrawing?.extendData as any)?.opacity ?? 1) * 100
+            )}
+            onChange={(e) =>
+              bridge.updateSelectedOverlayStyle?.({ opacity: Number(e.target.value) / 100 })
+            }
+            className="w-12 accent-[#2962ff] cursor-pointer"
+          />
+          <span className="text-[10px] font-mono-num text-[#787b86] w-7 text-right">
+            {Math.round(
+              (selectedOverlay.opacity ?? (singleDrawing?.extendData as any)?.opacity ?? 1) * 100
+            )}
+            %
+          </span>
+        </div>
+
         {/* Settings (Full Drawing Properties Modal) */}
         <button
           onClick={() => setDrawingSettingsOverlayId(selectedOverlay.id)}
@@ -470,7 +523,7 @@ export const DrawingFloatingBar: React.FC = () => {
           title={selectedOverlay.locked ? 'Unlock' : 'Lock'}
           className={`p-1 rounded ${
             selectedOverlay.locked
-              ? 'text-[#2962ff] bg-[#2962ff]/15'
+              ? 'text-[#f59e0b] bg-[#f59e0b]/15'
               : 'text-[#787b86] hover:bg-[#2a2e39] hover:text-[#d1d4dc]'
           }`}
         >
@@ -480,8 +533,13 @@ export const DrawingFloatingBar: React.FC = () => {
         {/* Delete */}
         <button
           onClick={() => bridge.deleteSelectedOverlay?.()}
-          title="Delete Drawing"
-          className="p-1 rounded text-[#787b86] hover:bg-[#f23645]/15 hover:text-[#f23645]"
+          disabled={selectedOverlay.locked}
+          title={selectedOverlay.locked ? 'Unlock drawing to delete' : 'Delete Drawing'}
+          className={`p-1 rounded ${
+            selectedOverlay.locked
+              ? 'text-[#787b86] opacity-40 cursor-not-allowed'
+              : 'text-[#787b86] hover:bg-[#f23645]/15 hover:text-[#f23645]'
+          }`}
         >
           <Trash2 className="w-3.5 h-3.5" />
         </button>

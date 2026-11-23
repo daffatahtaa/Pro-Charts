@@ -688,6 +688,8 @@ export interface DrawingItem {
   label?: string;
   locked: boolean;
   visible: boolean;
+  sort_order?: number;
+  created_at?: number;
   updated_at?: number;
 }
 
@@ -709,6 +711,7 @@ export interface DrawingExtendConfig {
   labelPosition?: LabelPosition;
   labelHAlign?: 'left' | 'center' | 'right';
   labelColor?: string;
+  opacity?: number;
   customTitle?: string;
   extendLeft?: boolean;
   extendRight?: boolean;
@@ -764,6 +767,7 @@ export interface SelectedOverlayInfo {
   lineWidth: number;
   lineStyle: 'solid' | 'dashed';
   locked: boolean;
+  opacity?: number;
   label?: string;
   labelPosition?: LabelPosition;
 }

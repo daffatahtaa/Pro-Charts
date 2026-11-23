@@ -377,6 +377,8 @@ export const DrawingSettingsModal: React.FC = () => {
   const handleApplyDefault = () => {
     const defExt: DrawingExtendConfig = {
       ...ext,
+      opacity: 1,
+      labelColor: undefined,
       extendLeft: false,
       extendRight: false,
       showTrendLine: false,
@@ -585,6 +587,25 @@ export const DrawingSettingsModal: React.FC = () => {
                 </div>
               </div>
 
+              {/* Universal Master Opacity (Fib) */}
+              <div className="flex items-center justify-between gap-3">
+                <span>Opacity</span>
+                <div className="flex items-center gap-2 flex-1 max-w-[200px]">
+                  <input
+                    type="range"
+                    min={5}
+                    max={100}
+                    step={5}
+                    value={Math.round((ext.opacity ?? 1) * 100)}
+                    onChange={(e) => updateExt({ opacity: Number(e.target.value) / 100 })}
+                    className="flex-1 accent-[#2962ff] cursor-pointer"
+                  />
+                  <span className="w-9 text-right text-[11px] font-mono-num text-[#d1d4dc]">
+                    {Math.round((ext.opacity ?? 1) * 100)}%
+                  </span>
+                </div>
+              </div>
+
               {/* Extend Mode */}
               <div className="flex items-center justify-between">
                 <span>Extend</span>
@@ -786,6 +807,25 @@ export const DrawingSettingsModal: React.FC = () => {
                     <option value="solid">Solid</option>
                     <option value="dashed">Dashed</option>
                   </select>
+                </div>
+              </div>
+
+              {/* Universal Master Opacity (All Drawing Tools) */}
+              <div className="flex items-center justify-between gap-3">
+                <span>Opacity</span>
+                <div className="flex items-center gap-2 flex-1 max-w-[200px]">
+                  <input
+                    type="range"
+                    min={5}
+                    max={100}
+                    step={5}
+                    value={Math.round((ext.opacity ?? 1) * 100)}
+                    onChange={(e) => updateExt({ opacity: Number(e.target.value) / 100 })}
+                    className="flex-1 accent-[#2962ff] cursor-pointer"
+                  />
+                  <span className="w-9 text-right text-[11px] font-mono-num text-[#d1d4dc]">
+                    {Math.round((ext.opacity ?? 1) * 100)}%
+                  </span>
                 </div>
               </div>
 
@@ -1039,15 +1079,25 @@ export const DrawingSettingsModal: React.FC = () => {
           )}
 
           {/* ==================== TAB 2: COORDINATES ==================== */}
-          {tab === 'coordinates' && (
+          {tab === 'coordinates' && (() => {
+            const currentItem = drawingsList.find((d) => d.id === overlayId);
+            const coordsLocked = Boolean(currentItem?.locked || useChartStore.getState().drawingsLocked);
+            return (
             <div className="space-y-3">
+              {coordsLocked && (
+                <div className="px-2.5 py-1.5 rounded bg-[#f59e0b]/15 border border-[#f59e0b]/40 text-[#f59e0b] text-[11px]">
+                  Drawing is locked — unlock it first to edit coordinates.
+                </div>
+              )}
               <div className="text-[11px] text-[#787b86]">
                 Set exact price and timestamp coordinates for each anchor point.
               </div>
               {points.map((pt, idx) => (
                 <div
                   key={idx}
-                  className="p-2.5 rounded bg-[#131722]/60 border border-[#2a2e39] space-y-2"
+                  className={`p-2.5 rounded bg-[#131722]/60 border border-[#2a2e39] space-y-2 ${
+                    coordsLocked ? 'opacity-55 pointer-events-none' : ''
+                  }`}
                 >
                   <div className="text-[11px] font-semibold text-[#787b86] uppercase">
                     Point #{idx + 1}
@@ -1140,7 +1190,8 @@ export const DrawingSettingsModal: React.FC = () => {
                 </div>
               ))}
             </div>
-          )}
+            );
+          })()}
 
           {/* ==================== TAB 3: VISIBILITY ==================== */}
           {tab === 'visibility' && (

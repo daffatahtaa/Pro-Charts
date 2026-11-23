@@ -116,12 +116,17 @@ export interface ChartActionsBridge {
       color?: string;
       lineWidth?: number;
       lineStyle?: 'solid' | 'dashed';
+      opacity?: number;
       locked?: boolean;
       visible?: boolean;
     }
   ) => void;
   groupOverlays?: (ids: string[], groupName?: string) => void;
   ungroupOverlays?: (ids: string[]) => void;
+  addOverlaysToGroup?: (ids: string[], groupId: string, groupName: string) => void;
+  removeOverlayFromGroup?: (id: string) => void;
+  cloneOverlayGroup?: (groupId: string) => void;
+  copyOverlayById?: (id: string) => void;
   renameOverlayGroup?: (groupId: string, newName: string) => void;
   selectOverlayById?: (id: string) => void;
   loadMoreDeepHistory?: (bars?: number) => void;
@@ -138,6 +143,13 @@ const LS_PINNED_TFS_KEY = 'tv_pinned_tfs';
 const LS_CUSTOM_TFS_KEY = 'tv_custom_tfs';
 const LS_WATCHLIST_KEY = 'tv_watchlist_items';
 const LS_TABS_KEY = 'tv_workspace_tabs_v1';
+const LS_DRAWING_GROUPS_KEY = 'tv_drawing_groups_v1';
+
+export interface DrawingGroupFolder {
+  id: string;
+  name: string;
+  symbol: string;
+}
 
 const DEFAULT_SECONDARY_PANES: Record<SecondaryPaneId, PaneConfig> = {
   'pane-2': { id: 'pane-2', symbol: 'EURUSD', timeframe: '1h' },
@@ -250,6 +262,7 @@ interface ChartStore {
   selectedOverlayIds: string[];
   drawingSettingsOverlayId: string | null;
   drawingsList: DrawingItem[];
+  drawingGroups: DrawingGroupFolder[];
   undoStack: DrawingItem[][];
   redoStack: DrawingItem[][];
 
@@ -344,6 +357,9 @@ interface ChartStore {
   toggleSelectedOverlayId: (id: string) => void;
   setDrawingSettingsOverlayId: (id: string | null) => void;
   setDrawingsList: (list: DrawingItem[]) => void;
+  addEmptyDrawingGroup: (symbol: string, name?: string) => DrawingGroupFolder;
+  renameEmptyDrawingGroup: (groupId: string, name: string) => void;
+  removeEmptyDrawingGroup: (groupId: string) => void;
   pushUndoSnapshot: (snapshot: DrawingItem[]) => void;
   undoDrawing: () => void;
   redoDrawing: () => void;
@@ -547,6 +563,7 @@ export const useChartStore = create<ChartStore>((set, get) => ({
   selectedOverlayIds: [],
   drawingSettingsOverlayId: null,
   drawingsList: [],
+  drawingGroups: loadLS<DrawingGroupFolder[]>(LS_DRAWING_GROUPS_KEY, []),
   undoStack: [],
   redoStack: [],
 
@@ -963,6 +980,53 @@ export const useChartStore = create<ChartStore>((set, get) => ({
   setDrawingSettingsOverlayId: (drawingSettingsOverlayId) => set({ drawingSettingsOverlayId }),
 
   setDrawingsList: (drawingsList) => set({ drawingsList }),
+
+  addEmptyDrawingGroup: (symbol, name) => {
+    const state = get();
+    const existingForSym = new Set<string>();
+    state.drawingGroups
+      .filter((g) => g.symbol === symbol)
+      .forEach((g) => existingForSym.add(g.id));
+    state.drawingsList.forEach((d) => {
+      const gid = (d.extendData as any)?.groupId;
+      if (gid) existingForSym.add(gid);
+    });
+    const folder: DrawingGroupFolder = {
+      id: `grp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      name: name?.trim() || `Group ${existingForSym.size + 1}`,
+      symbol,
+    };
+    const next = [...state.drawingGroups, folder];
+    try {
+      localStorage.setItem(LS_DRAWING_GROUPS_KEY, JSON.stringify(next));
+    } catch {}
+    set({ drawingGroups: next });
+    return folder;
+  },
+
+  renameEmptyDrawingGroup: (groupId, name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    set((state) => {
+      const next = state.drawingGroups.map((g) =>
+        g.id === groupId ? { ...g, name: trimmed } : g
+      );
+      try {
+        localStorage.setItem(LS_DRAWING_GROUPS_KEY, JSON.stringify(next));
+      } catch {}
+      return { drawingGroups: next };
+    });
+  },
+
+  removeEmptyDrawingGroup: (groupId) => {
+    set((state) => {
+      const next = state.drawingGroups.filter((g) => g.id !== groupId);
+      try {
+        localStorage.setItem(LS_DRAWING_GROUPS_KEY, JSON.stringify(next));
+      } catch {}
+      return { drawingGroups: next };
+    });
+  },
 
   pushUndoSnapshot: (snapshot) =>
     set((state) => ({

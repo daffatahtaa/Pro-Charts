@@ -12,6 +12,15 @@ import {
   Download,
   Trash2,
   BookmarkPlus,
+  Lock,
+  Unlock,
+  EyeOff,
+  Eye,
+  Copy,
+  FolderPlus,
+  FolderMinus,
+  Folder,
+  Layers,
 } from 'lucide-react';
 import { useChartStore } from '../store/useChartStore';
 import {
@@ -28,6 +37,7 @@ export interface ContextMenuState {
   price: number;
   timestamp: number | null;
   dataIndex: number | null;
+  targetOverlayId?: string | null;
 }
 
 export type CopiedClipboardState =
@@ -131,6 +141,7 @@ export const ChartContextMenu: React.FC<ChartContextMenuProps> = ({
 }) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const [tplSubOpen, setTplSubOpen] = useState(false);
+  const [groupSubOpen, setGroupSubOpen] = useState(false);
   const [savedTemplates, setSavedTemplates] = useState<SavedChartTemplate[]>(() =>
     loadChartTemplates()
   );
@@ -145,7 +156,11 @@ export const ChartContextMenu: React.FC<ChartContextMenuProps> = ({
     replay,
     defaultLot,
     selectedOverlay,
+    selectedOverlayIds,
+    setSelectedOverlayIds,
     drawingsList,
+    drawingGroups,
+    drawingsLocked,
     watchlistVisible,
     toggleWatchlist,
     setRightSidebarTab,
@@ -167,6 +182,7 @@ export const ChartContextMenu: React.FC<ChartContextMenuProps> = ({
   useEffect(() => {
     if (!menu) {
       setTplSubOpen(false);
+      setGroupSubOpen(false);
       setSavingTpl(false);
       return;
     }
@@ -290,6 +306,290 @@ export const ChartContextMenu: React.FC<ChartContextMenuProps> = ({
   };
 
   const drawingsCount = drawingsList.length;
+
+  // Context-Aware TradingView Drawing Right-Click Menu (Issues #14, #8, #9)
+  const targetDrawing = menu.targetOverlayId
+    ? drawingsList.find((d) => d.id === menu.targetOverlayId) || null
+    : null;
+
+  if (targetDrawing) {
+    const isMulti =
+      selectedOverlayIds.length > 1 && selectedOverlayIds.includes(targetDrawing.id);
+    const activeIds = isMulti ? selectedOverlayIds : [targetDrawing.id];
+    const activeItems = drawingsList.filter((d) => activeIds.includes(d.id));
+    const allLocked =
+      drawingsLocked || (activeItems.length > 0 && activeItems.every((d) => d.locked));
+    const targetGroupId = (targetDrawing.extendData as any)?.groupId as string | undefined;
+    const targetGroupName = (targetDrawing.extendData as any)?.groupName as string | undefined;
+    const targetGroupMembers = targetGroupId
+      ? drawingsList.filter((d) => (d.extendData as any)?.groupId === targetGroupId)
+      : [];
+
+    // Collect available groups on this symbol for "Add to group" submenu
+    const availableGroups = new Map<string, string>();
+    drawingGroups
+      .filter((g) => g.symbol === symbol)
+      .forEach((g) => availableGroups.set(g.id, g.name));
+    drawingsList.forEach((d) => {
+      const gid = (d.extendData as any)?.groupId;
+      if (gid) availableGroups.set(gid, String((d.extendData as any)?.groupName || 'Group'));
+    });
+    const groupOptions = Array.from(availableGroups.entries()).map(([id, name]) => ({
+      id,
+      name,
+    }));
+
+    return (
+      <div
+        ref={menuRef}
+        style={{ left: `${left}px`, top: `${top}px`, width: `${menuW}px` }}
+        onContextMenu={(e) => e.preventDefault()}
+        className="fixed z-50 bg-[#1e222d] border border-[#363a45] rounded-md shadow-2xl py-1.5 text-[12.5px] text-[#d1d4dc] select-none"
+      >
+        <div className="px-3 py-1 text-[10.5px] uppercase tracking-wider text-[#787b86] flex items-center justify-between border-b border-[#2a2e39] mb-1">
+          <span className="truncate">
+            {isMulti ? `${activeIds.length} Drawings Selected` : targetDrawing.name}
+          </span>
+          {targetGroupName && !isMulti && (
+            <span className="px-1.5 py-0.2 rounded bg-[#2962ff]/15 text-[#2962ff] text-[9.5px] normal-case truncate max-w-[110px]">
+              {targetGroupName}
+            </span>
+          )}
+        </div>
+
+        {/* Settings */}
+        {!isMulti && (
+          <button
+            onClick={() => {
+              setDrawingSettingsOverlayId(targetDrawing.id);
+              onClose();
+            }}
+            className="w-full px-3 py-1.5 flex items-center gap-2.5 hover:bg-[#2a2e39] text-left cursor-pointer"
+          >
+            <Settings className="w-4 h-4 text-[#9598a1] shrink-0" />
+            <span className="flex-1">Settings...</span>
+          </button>
+        )}
+
+        {/* Copy / Clone */}
+        {!isMulti && (
+          <button
+            onClick={() => {
+              bridge.copyOverlayById?.(targetDrawing.id);
+              onClose();
+            }}
+            className="w-full px-3 py-1.5 flex items-center gap-2.5 hover:bg-[#2a2e39] text-left cursor-pointer"
+          >
+            <Copy className="w-4 h-4 text-[#9598a1] shrink-0" />
+            <span className="flex-1">Copy</span>
+            <span className="text-[10.5px] text-[#787b86]">Ctrl+C</span>
+          </button>
+        )}
+
+        {/* Lock / Unlock */}
+        <button
+          onClick={() => {
+            if (isMulti) {
+              bridge.updateMultipleOverlaysStyle?.(activeIds, { locked: !allLocked });
+            } else {
+              bridge.toggleSingleOverlayLock?.(targetDrawing.id);
+            }
+            onClose();
+          }}
+          className="w-full px-3 py-1.5 flex items-center gap-2.5 hover:bg-[#2a2e39] text-left cursor-pointer"
+        >
+          {targetDrawing.locked || (isMulti && allLocked) ? (
+            <Unlock className="w-4 h-4 text-[#f59e0b] shrink-0" />
+          ) : (
+            <Lock className="w-4 h-4 text-[#9598a1] shrink-0" />
+          )}
+          <span className="flex-1">
+            {isMulti
+              ? allLocked
+                ? 'Unlock selected'
+                : 'Lock selected'
+              : targetDrawing.locked
+              ? 'Unlock'
+              : 'Lock'}
+          </span>
+        </button>
+
+        {/* Hide / Show */}
+        <button
+          onClick={() => {
+            if (isMulti) {
+              bridge.updateMultipleOverlaysStyle?.(activeIds, { visible: false });
+              setSelectedOverlayIds([]);
+            } else {
+              bridge.toggleSingleOverlayVisible?.(targetDrawing.id);
+            }
+            onClose();
+          }}
+          className="w-full px-3 py-1.5 flex items-center gap-2.5 hover:bg-[#2a2e39] text-left cursor-pointer"
+        >
+          {targetDrawing.visible !== false ? (
+            <EyeOff className="w-4 h-4 text-[#9598a1] shrink-0" />
+          ) : (
+            <Eye className="w-4 h-4 text-[#2962ff] shrink-0" />
+          )}
+          <span className="flex-1">
+            {isMulti ? 'Hide selected' : targetDrawing.visible !== false ? 'Hide' : 'Show'}
+          </span>
+        </button>
+
+        <div className="my-1 border-t border-[#2a2e39]" />
+
+        {/* Group Actions (Issue #9) */}
+        {isMulti ? (
+          <button
+            onClick={() => {
+              bridge.groupOverlays?.(activeIds);
+              onClose();
+            }}
+            className="w-full px-3 py-1.5 flex items-center gap-2.5 hover:bg-[#2a2e39] text-left cursor-pointer"
+          >
+            <FolderPlus className="w-4 h-4 text-[#2962ff] shrink-0" />
+            <span className="flex-1">Group selected</span>
+            <span className="text-[10.5px] text-[#787b86]">Ctrl+G</span>
+          </button>
+        ) : !targetGroupId ? (
+          <button
+            onClick={() => {
+              bridge.groupOverlays?.([targetDrawing.id]);
+              onClose();
+            }}
+            className="w-full px-3 py-1.5 flex items-center gap-2.5 hover:bg-[#2a2e39] text-left cursor-pointer"
+          >
+            <FolderPlus className="w-4 h-4 text-[#2962ff] shrink-0" />
+            <span className="flex-1">Create group from drawing</span>
+          </button>
+        ) : (
+          <>
+            <button
+              onClick={() => {
+                setSelectedOverlayIds(targetGroupMembers.map((m) => m.id));
+                onClose();
+              }}
+              className="w-full px-3 py-1.5 flex items-center gap-2.5 hover:bg-[#2a2e39] text-left cursor-pointer"
+            >
+              <Folder className="w-4 h-4 text-[#2962ff] shrink-0" />
+              <span className="flex-1">
+                Select group ({targetGroupMembers.length})
+              </span>
+            </button>
+            <button
+              onClick={() => {
+                bridge.cloneOverlayGroup?.(targetGroupId);
+                onClose();
+              }}
+              className="w-full px-3 py-1.5 flex items-center gap-2.5 hover:bg-[#2a2e39] text-left cursor-pointer"
+            >
+              <Copy className="w-4 h-4 text-[#9598a1] shrink-0" />
+              <span className="flex-1">Clone group</span>
+            </button>
+            <button
+              onClick={() => {
+                bridge.removeOverlayFromGroup?.(targetDrawing.id);
+                onClose();
+              }}
+              className="w-full px-3 py-1.5 flex items-center gap-2.5 hover:bg-[#2a2e39] text-left cursor-pointer"
+            >
+              <FolderMinus className="w-4 h-4 text-[#f59e0b] shrink-0" />
+              <span className="flex-1">Remove from group</span>
+            </button>
+            <button
+              onClick={() => {
+                bridge.ungroupOverlays?.(targetGroupMembers.map((m) => m.id));
+                onClose();
+              }}
+              className="w-full px-3 py-1.5 flex items-center gap-2.5 hover:bg-[#2a2e39] text-left cursor-pointer"
+            >
+              <FolderMinus className="w-4 h-4 text-[#f59e0b] shrink-0" />
+              <span className="flex-1">Ungroup all</span>
+              <span className="text-[10.5px] text-[#787b86]">Ctrl+Shift+G</span>
+            </button>
+          </>
+        )}
+
+        {groupOptions.length > 0 && (
+          <div
+            className="relative"
+            onMouseEnter={() => setGroupSubOpen(true)}
+            onMouseLeave={() => setGroupSubOpen(false)}
+          >
+            <button
+              type="button"
+              onClick={() => setGroupSubOpen((v) => !v)}
+              className="w-full px-3 py-1.5 flex items-center gap-2.5 hover:bg-[#2a2e39] text-left cursor-pointer"
+            >
+              <Folder className="w-4 h-4 text-[#9598a1] shrink-0" />
+              <span className="flex-1">Add to group</span>
+              <ChevronRight className="w-3.5 h-3.5 text-[#787b86]" />
+            </button>
+            {groupSubOpen && (
+              <div
+                style={{ left: openSubLeft ? -192 : menuW - 4 }}
+                className="absolute top-0 w-48 bg-[#1e222d] border border-[#363a45] rounded-md shadow-2xl py-1 z-50"
+              >
+                {groupOptions.map((g) => (
+                  <button
+                    key={g.id}
+                    onClick={() => {
+                      bridge.addOverlaysToGroup?.(activeIds, g.id, g.name);
+                      onClose();
+                    }}
+                    className="w-full px-3 py-1.5 hover:bg-[#2a2e39] text-left flex items-center gap-2 truncate cursor-pointer"
+                  >
+                    <Folder className="w-3.5 h-3.5 text-[#2962ff] shrink-0" />
+                    <span className="truncate">{g.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Object Tree */}
+        <button
+          onClick={() => {
+            if (!watchlistVisible) toggleWatchlist();
+            setRightSidebarTab('objects');
+            onClose();
+          }}
+          className="w-full px-3 py-1.5 flex items-center gap-2.5 hover:bg-[#2a2e39] text-left cursor-pointer"
+        >
+          <Layers className="w-4 h-4 text-[#9598a1] shrink-0" />
+          <span className="flex-1">Object tree...</span>
+        </button>
+
+        <div className="my-1 border-t border-[#2a2e39]" />
+
+        {/* Remove drawing (Lock-protected per Issue #8) */}
+        <button
+          disabled={allLocked}
+          onClick={() => {
+            if (isMulti) {
+              bridge.deleteMultipleOverlays?.(activeIds);
+            } else {
+              bridge.deleteSingleOverlay?.(targetDrawing.id);
+            }
+            onClose();
+          }}
+          title={allLocked ? 'Unlock drawing first to delete' : 'Delete drawing (Del)'}
+          className="w-full px-3 py-1.5 flex items-center gap-2.5 hover:bg-[#f23645]/15 text-[#f23645] disabled:text-[#787b86] disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed text-left cursor-pointer"
+        >
+          <Trash2 className="w-4 h-4 shrink-0" />
+          <span className="flex-1">
+            {allLocked
+              ? 'Locked (unlock to remove)'
+              : isMulti
+              ? `Remove ${activeIds.length} drawings`
+              : 'Remove drawing'}
+          </span>
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -593,7 +893,10 @@ export const ChartContextMenu: React.FC<ChartContextMenuProps> = ({
 
       {/* Section 6: Remove drawings */}
       <button
-        disabled={!selectedOverlay && drawingsCount === 0}
+        disabled={
+          (!selectedOverlay && drawingsCount === 0) ||
+          Boolean(selectedOverlay && (selectedOverlay.locked || drawingsLocked))
+        }
         onClick={() => {
           if (selectedOverlay) {
             bridge.deleteSelectedOverlay?.();
@@ -607,7 +910,9 @@ export const ChartContextMenu: React.FC<ChartContextMenuProps> = ({
         <span className="w-4 shrink-0" />
         <span className="flex-1">
           {selectedOverlay
-            ? 'Remove 1 drawing'
+            ? selectedOverlay.locked || drawingsLocked
+              ? 'Drawing locked (unlock to remove)'
+              : 'Remove 1 drawing'
             : `Remove ${drawingsCount} ${drawingsCount === 1 ? 'drawing' : 'drawings'}`}
         </span>
       </button>

@@ -1424,12 +1424,165 @@ const customParallelChannelOverlay: OverlayTemplate = {
   },
 };
 
+const SYSTEM_OVERLAY_NAMES = new Set([
+  'tradePositionLine',
+  'bidAskLine',
+  'priceAlertLine',
+]);
+
+const OPACITY_COLOR_KEYS = [
+  'color',
+  'borderColor',
+  'backgroundColor',
+  'textColor',
+  'activeColor',
+  'activeBorderColor',
+];
+
+export function applyColorOpacity(color: unknown, opacity: number): unknown {
+  if (typeof color !== 'string' || !color || opacity >= 0.999) return color;
+  const trimmed = color.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower === 'transparent' || lower === 'none') return color;
+
+  const factor = Math.max(0.05, Math.min(1, opacity));
+
+  // rgba(r, g, b, a) or rgb(r, g, b)
+  const rgbaMatch = trimmed.match(
+    /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/i
+  );
+  if (rgbaMatch) {
+    const r = Math.round(Number(rgbaMatch[1]));
+    const g = Math.round(Number(rgbaMatch[2]));
+    const b = Math.round(Number(rgbaMatch[3]));
+    const existingAlpha = rgbaMatch[4] !== undefined ? Number(rgbaMatch[4]) : 1;
+    const nextAlpha = Math.max(0, Math.min(1, existingAlpha * factor));
+    return `rgba(${r}, ${g}, ${b}, ${Number(nextAlpha.toFixed(4))})`;
+  }
+
+  // #RGB, #RRGGBB, #RRGGBBAA
+  if (trimmed.startsWith('#')) {
+    const hex = trimmed.slice(1);
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    let a = 1;
+    if (hex.length === 3) {
+      r = parseInt(hex[0] + hex[0], 16);
+      g = parseInt(hex[1] + hex[1], 16);
+      b = parseInt(hex[2] + hex[2], 16);
+    } else if (hex.length === 6) {
+      r = parseInt(hex.slice(0, 2), 16);
+      g = parseInt(hex.slice(2, 4), 16);
+      b = parseInt(hex.slice(4, 6), 16);
+    } else if (hex.length === 8) {
+      r = parseInt(hex.slice(0, 2), 16);
+      g = parseInt(hex.slice(2, 4), 16);
+      b = parseInt(hex.slice(4, 6), 16);
+      a = parseInt(hex.slice(6, 8), 16) / 255;
+    } else {
+      return color;
+    }
+    if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return color;
+    const nextAlpha = Math.max(0, Math.min(1, a * factor));
+    return `rgba(${r}, ${g}, ${b}, ${Number(nextAlpha.toFixed(4))})`;
+  }
+
+  return color;
+}
+
+function applyOpacityToFigures(figures: any, opacity: number): any {
+  if (!figures) return figures;
+  const transformOne = (fig: any) => {
+    if (!fig || typeof fig !== 'object' || !fig.styles || typeof fig.styles !== 'object') {
+      return fig;
+    }
+    const nextStyles: Record<string, any> = { ...fig.styles };
+    for (const key of OPACITY_COLOR_KEYS) {
+      if (key in nextStyles) {
+        nextStyles[key] = applyColorOpacity(nextStyles[key], opacity);
+      }
+    }
+    return { ...fig, styles: nextStyles };
+  };
+  return Array.isArray(figures) ? figures.map(transformOne) : transformOne(figures);
+}
+
+/**
+ * Universal Opacity decorator (Issue #6): applies `extendData.opacity` proportionally
+ * across every figure of every non-system drawing overlay without losing fill translucency.
+ */
+function withUniversalOpacity(tpl: OverlayTemplate): OverlayTemplate {
+  if (SYSTEM_OVERLAY_NAMES.has(tpl.name)) return tpl;
+  const origPoint = tpl.createPointFigures;
+  const origXAxis = tpl.createXAxisFigures;
+  const origYAxis = tpl.createYAxisFigures;
+
+  const getOpacity = (overlay: any): number => {
+    const raw = (overlay?.extendData as DrawingExtendConfig | undefined)?.opacity;
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw < 0.999) {
+      return Math.max(0.05, Math.min(1, raw));
+    }
+    return 1;
+  };
+
+  return {
+    ...tpl,
+    ...(origPoint
+      ? {
+          createPointFigures: (args: any) => {
+            const res = origPoint(args);
+            const op = getOpacity(args?.overlay);
+            return op < 0.999 ? applyOpacityToFigures(res, op) : res;
+          },
+        }
+      : {}),
+    ...(origXAxis
+      ? {
+          createXAxisFigures: (args: any) => {
+            const res = origXAxis(args);
+            const op = getOpacity(args?.overlay);
+            return op < 0.999 ? applyOpacityToFigures(res, op) : res;
+          },
+        }
+      : {}),
+    ...(origYAxis
+      ? {
+          createYAxisFigures: (args: any) => {
+            const res = origYAxis(args);
+            const op = getOpacity(args?.overlay);
+            return op < 0.999 ? applyOpacityToFigures(res, op) : res;
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * Defense-in-depth Right-Click Guard (Issue #14): KLineCharts v9 auto-removes an overlay
+ * on right-click unless `onRightClick` returns `true`. Guarantee every overlay defaults to `true`.
+ */
+function withSafeRightClick(tpl: OverlayTemplate): OverlayTemplate {
+  const origRightClick = tpl.onRightClick;
+  return {
+    ...tpl,
+    onRightClick: (event: any) => {
+      if (origRightClick) {
+        const res = origRightClick(event);
+        return res === undefined ? true : Boolean(res);
+      }
+      return true;
+    },
+  };
+}
+
 let registered = false;
 
 export function registerCustomOverlays() {
   if (registered) return;
   registered = true;
-  const reg = (tpl: OverlayTemplate) => registerOverlay(withShiftAngleLock(tpl));
+  const reg = (tpl: OverlayTemplate) =>
+    registerOverlay(withSafeRightClick(withUniversalOpacity(withShiftAngleLock(tpl))));
   reg(labeledSegmentOverlay);
   reg(labeledRayLineOverlay);
   reg(labeledHorizontalLineOverlay);

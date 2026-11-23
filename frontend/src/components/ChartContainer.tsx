@@ -239,6 +239,16 @@ export const ChartContainer: React.FC = () => {
   const lastKnownPointsRef = useRef<
     Record<string, Array<{ timestamp?: number; dataIndex?: number; value?: number }>>
   >({});
+  const rightClickedOverlayRef = useRef<{ id: string; at: number } | null>(null);
+  const groupDragSessionRef = useRef<{
+    movedId: string;
+    origMovedPt0: { timestamp?: number; dataIndex?: number; value?: number };
+    siblingOrigPts: Record<
+      string,
+      Array<{ timestamp?: number; dataIndex?: number; value?: number }>
+    >;
+  } | null>(null);
+  const finalizeOrCancelInProgressPathRef = useRef<(() => boolean) | null>(null);
   const selectedOverlayIds = useChartStore((s) => s.selectedOverlayIds);
   const drawingsList = useChartStore((s) => s.drawingsList);
   const [isSubmittingPos, setIsSubmittingPos] = useState(false);
@@ -447,6 +457,7 @@ export const ChartContainer: React.FC = () => {
             id: 'sys_hl_high',
             name: 'bidAskLine',
             lock: true,
+            onRightClick: () => true,
             points: [{ value: hi }],
             extendData: {
               color: state.chartSettings.highLowColor,
@@ -460,6 +471,7 @@ export const ChartContainer: React.FC = () => {
             id: 'sys_hl_low',
             name: 'bidAskLine',
             lock: true,
+            onRightClick: () => true,
             points: [{ value: lo }],
             extendData: {
               color: state.chartSettings.highLowColor,
@@ -505,13 +517,30 @@ export const ChartContainer: React.FC = () => {
       if (recordUndo) {
         state.pushUndoSnapshot([...state.drawingsList]);
       }
-      const nextList = [
-        ...state.drawingsList.filter((d) => d.id !== item.id),
-        item,
-      ];
-      lastKnownPointsRef.current[item.id] = (item.points || []).map((p) => ({ ...p }));
+      // Update in-place to preserve exact Z-order / Object Tree index (Issue #10)
+      const existingIdx = state.drawingsList.findIndex((d) => d.id === item.id);
+      let nextItem: DrawingItem = item;
+      let nextList: DrawingItem[];
+      if (existingIdx >= 0) {
+        const prev = state.drawingsList[existingIdx];
+        nextItem = {
+          ...item,
+          sort_order: item.sort_order ?? prev.sort_order,
+          created_at: item.created_at ?? prev.created_at,
+        };
+        nextList = state.drawingsList.map((d, i) => (i === existingIdx ? nextItem : d));
+      } else {
+        const maxOrder = state.drawingsList.reduce((m, d) => Math.max(m, d.sort_order ?? 0), 0);
+        nextItem = {
+          ...item,
+          sort_order: item.sort_order ?? maxOrder + 1,
+          created_at: item.created_at ?? Date.now(),
+        };
+        nextList = [...state.drawingsList, nextItem];
+      }
+      lastKnownPointsRef.current[nextItem.id] = (nextItem.points || []).map((p) => ({ ...p }));
       state.setDrawingsList(nextList);
-      api.saveDrawing(item).catch(() => {});
+      api.saveDrawing(nextItem).catch(() => {});
     },
     [serializeOverlay]
   );
@@ -521,9 +550,33 @@ export const ChartContainer: React.FC = () => {
       onDrawEnd: (event: OverlayEvent) => {
         inProgressOverlayIdRef.current = null;
         const state = useChartStore.getState();
-        persistOverlay(event.overlay, true);
-
         const ov: any = event.overlay;
+
+        // Deduplicate trailing double-click vertex on unlimited Path tool (Issue #12)
+        if (ov && ov.name === 'pathTool' && Array.isArray(ov.points) && ov.points.length >= 2) {
+          const deduped: any[] = [];
+          for (const p of ov.points) {
+            const prev = deduped[deduped.length - 1];
+            if (
+              prev &&
+              prev.dataIndex === p.dataIndex &&
+              prev.timestamp === p.timestamp &&
+              typeof prev.value === 'number' &&
+              typeof p.value === 'number' &&
+              Math.abs(prev.value - p.value) < 1e-9
+            ) {
+              continue;
+            }
+            deduped.push({ ...p });
+          }
+          if (deduped.length >= 2 && deduped.length !== ov.points.length) {
+            chartRef.current?.overrideOverlay({ id: String(ov.id), points: deduped });
+            ov.points = deduped;
+          }
+        }
+
+        persistOverlay(ov, true);
+
         if (ov && !isSystemOverlay(String(ov.id), String(ov.name))) {
           const lineStyleObj = ov?.styles?.line || {};
           const rawExt = ov.extendData;
@@ -537,6 +590,10 @@ export const ChartContainer: React.FC = () => {
             typeof rawExt === 'object' && rawExt && rawExt.labelPosition
               ? rawExt.labelPosition
               : 'top';
+          const opacity =
+            typeof rawExt === 'object' && rawExt && typeof rawExt.opacity === 'number'
+              ? rawExt.opacity
+              : 1;
           state.setSelectedOverlay({
             id: String(ov.id),
             name: String(ov.name),
@@ -544,6 +601,7 @@ export const ChartContainer: React.FC = () => {
             lineWidth: lineStyleObj.size || 1.5,
             lineStyle: lineStyleObj.style === 'dashed' ? 'dashed' : 'solid',
             locked: Boolean(ov.lock),
+            opacity,
             label,
             labelPosition,
           });
@@ -571,67 +629,119 @@ export const ChartContainer: React.FC = () => {
         }
         return false;
       },
-      onPressedMoving: () => {
+      onPressedMoveStart: (event: OverlayEvent) => {
+        const movedOv: any = event.overlay;
+        const chart = chartRef.current;
+        groupDragSessionRef.current = null;
+        if (!movedOv || !chart || isSystemOverlay(String(movedOv.id), String(movedOv.name))) {
+          return false;
+        }
+        const st = useChartStore.getState();
+        if (movedOv.lock || st.drawingsLocked) return false;
+
+        // Only shift group/multi-selected siblings when dragging the WHOLE body — NOT a single anchor handle! (Issue #9)
+        const figureKey = String((event as any)?.figureKey || '');
+        if (figureKey.startsWith('overlay_point_')) {
+          return false;
+        }
+
+        const movedId = String(movedOv.id);
+        const movedExt = (movedOv.extendData || {}) as Record<string, any>;
+        const movedGroupId = movedExt.groupId as string | undefined;
+        const siblingSet = new Set<string>();
+        if (movedGroupId) {
+          st.drawingsList.forEach((d) => {
+            if (d.id !== movedId && (d.extendData as any)?.groupId === movedGroupId) {
+              siblingSet.add(d.id);
+            }
+          });
+        }
+        if (st.selectedOverlayIds.length > 1 && st.selectedOverlayIds.includes(movedId)) {
+          st.selectedOverlayIds.forEach((id) => {
+            if (id !== movedId) siblingSet.add(id);
+          });
+        }
+
+        const curPts = movedOv.points || [];
+        if (siblingSet.size > 0 && curPts[0]) {
+          const siblingOrigPts: Record<
+            string,
+            Array<{ timestamp?: number; dataIndex?: number; value?: number }>
+          > = {};
+          for (const sibId of siblingSet) {
+            const sibOv: any = chart.getOverlayById(sibId);
+            if (!sibOv || sibOv.lock) continue;
+            siblingOrigPts[sibId] = (sibOv.points || []).map((p: any) => ({ ...p }));
+          }
+          if (Object.keys(siblingOrigPts).length > 0) {
+            groupDragSessionRef.current = {
+              movedId,
+              origMovedPt0: { ...curPts[0] },
+              siblingOrigPts,
+            };
+          }
+        }
+        return false;
+      },
+      onPressedMoving: (event: OverlayEvent) => {
+        const sess = groupDragSessionRef.current;
+        const movedOv: any = event.overlay;
+        const chart = chartRef.current;
+        if (sess && chart && movedOv && String(movedOv.id) === sess.movedId) {
+          const curPt0 = movedOv.points?.[0];
+          const origPt0 = sess.origMovedPt0;
+          if (curPt0 && origPt0) {
+            const dVal =
+              typeof curPt0.value === 'number' && typeof origPt0.value === 'number'
+                ? curPt0.value - origPt0.value
+                : 0;
+            const dIdx =
+              typeof curPt0.dataIndex === 'number' && typeof origPt0.dataIndex === 'number'
+                ? curPt0.dataIndex - origPt0.dataIndex
+                : 0;
+            const dTs =
+              typeof curPt0.timestamp === 'number' && typeof origPt0.timestamp === 'number'
+                ? curPt0.timestamp - origPt0.timestamp
+                : 0;
+            for (const [sibId, origSibPts] of Object.entries(sess.siblingOrigPts)) {
+              const shifted = origSibPts.map((p) => ({
+                ...(typeof p.timestamp === 'number' ? { timestamp: p.timestamp + dTs } : {}),
+                ...(typeof p.dataIndex === 'number' ? { dataIndex: p.dataIndex + dIdx } : {}),
+                ...(typeof p.value === 'number' ? { value: p.value + dVal } : {}),
+              }));
+              chart.overrideOverlay({ id: sibId, points: shifted });
+            }
+          }
+        }
         setCoordTick((n) => (n + 1) % 1000000);
         return false;
       },
       onPressedMoveEnd: (event: OverlayEvent) => {
         const movedOv: any = event.overlay;
         const chart = chartRef.current;
-        if (movedOv && chart && !isSystemOverlay(String(movedOv.id), String(movedOv.name))) {
-          const movedId = String(movedOv.id);
-          const prevPts = lastKnownPointsRef.current[movedId];
-          const curPts = movedOv.points || [];
-          const st = useChartStore.getState();
-          const movedExt = (movedOv.extendData || {}) as Record<string, any>;
-          const movedGroupId = movedExt.groupId as string | undefined;
+        const st = useChartStore.getState();
 
-          // Collect sibling IDs (either same group or multi-selection)
-          const siblingSet = new Set<string>();
-          if (movedGroupId) {
-            st.drawingsList.forEach((d) => {
-              if (d.id !== movedId && (d.extendData as any)?.groupId === movedGroupId) {
-                siblingSet.add(d.id);
-              }
-            });
-          }
-          if (st.selectedOverlayIds.length > 1 && st.selectedOverlayIds.includes(movedId)) {
-            st.selectedOverlayIds.forEach((id) => {
-              if (id !== movedId) siblingSet.add(id);
-            });
-          }
+        // Strict lock guard (Issue #8): never persist or shift siblings if locked
+        if (!movedOv || movedOv.lock || st.drawingsLocked) {
+          groupDragSessionRef.current = null;
+          return false;
+        }
 
-          if (siblingSet.size > 0 && prevPts && prevPts[0] && curPts[0]) {
-            const dVal =
-              typeof curPts[0].value === 'number' && typeof prevPts[0].value === 'number'
-                ? curPts[0].value - prevPts[0].value
-                : 0;
-            const dIdx =
-              typeof curPts[0].dataIndex === 'number' && typeof prevPts[0].dataIndex === 'number'
-                ? curPts[0].dataIndex - prevPts[0].dataIndex
-                : 0;
-            const dTs =
-              typeof curPts[0].timestamp === 'number' && typeof prevPts[0].timestamp === 'number'
-                ? curPts[0].timestamp - prevPts[0].timestamp
-                : 0;
+        const sess = groupDragSessionRef.current;
+        groupDragSessionRef.current = null;
 
-            if (dVal !== 0 || dIdx !== 0 || dTs !== 0) {
-              for (const sibId of siblingSet) {
-                const sibOv: any = chart.getOverlayById(sibId);
-                if (!sibOv || sibOv.lock) continue;
-                const shifted = (sibOv.points || []).map((p: any) => ({
-                  ...(typeof p.timestamp === 'number' ? { timestamp: p.timestamp + dTs } : {}),
-                  ...(typeof p.dataIndex === 'number' ? { dataIndex: p.dataIndex + dIdx } : {}),
-                  ...(typeof p.value === 'number' ? { value: p.value + dVal } : {}),
-                }));
-                chart.overrideOverlay({ id: sibId, points: shifted });
-                const updated = chart.getOverlayById(sibId);
-                if (updated) persistOverlay(updated, false);
-              }
+        if (sess && chart && String(movedOv.id) === sess.movedId) {
+          const sibIds = Object.keys(sess.siblingOrigPts);
+          if (sibIds.length > 0) {
+            st.pushUndoSnapshot([...st.drawingsList]);
+            for (const sibId of sibIds) {
+              const updated = chart.getOverlayById(sibId);
+              if (updated && !updated.lock) persistOverlay(updated, false);
             }
           }
         }
-        persistOverlay(event.overlay, false);
+
+        persistOverlay(movedOv, false);
         setCoordTick((n) => (n + 1) % 1000000);
         return false;
       },
@@ -664,6 +774,7 @@ export const ChartContainer: React.FC = () => {
         if (!ov || isSystemOverlay(String(ov.id), String(ov.name))) return false;
         lastOverlaySelectedAtRef.current = Date.now();
         const lineStyleObj = ov?.styles?.line || {};
+        const rawExt = (ov.extendData || {}) as Record<string, any>;
         const info: SelectedOverlayInfo = {
           id: String(ov.id),
           name: String(ov.name),
@@ -671,7 +782,9 @@ export const ChartContainer: React.FC = () => {
           lineWidth: lineStyleObj.size || 1,
           lineStyle: lineStyleObj.style === 'dashed' ? 'dashed' : 'solid',
           locked: Boolean(ov.lock),
-          label: String((ov.extendData as any)?.label || ''),
+          opacity: typeof rawExt.opacity === 'number' ? rawExt.opacity : 1,
+          label: String(rawExt.label || ''),
+          labelPosition: rawExt.labelPosition || 'top',
         };
         useChartStore.getState().setSelectedOverlay(info);
         if (ov.name === 'riskRewardLong' || ov.name === 'riskRewardShort') {
@@ -694,9 +807,151 @@ export const ChartContainer: React.FC = () => {
         useChartStore.getState().setDrawingSettingsOverlayId(String(ov.id));
         return true;
       },
+      // CRITICAL (Issue #14 & #12): Always return true so KLineCharts v9 never auto-deletes the overlay on right-click!
+      onRightClick: (event: OverlayEvent) => {
+        const ov: any = event.overlay;
+        if (!ov) return true;
+        const id = String(ov.id);
+        const name = String(ov.name);
+        if (isSystemOverlay(id, name)) return true;
+
+        // If actively drawing an unlimited Path tool, right-clicking finalizes it cleanly instead of deleting!
+        if (inProgressOverlayIdRef.current === id && name === 'pathTool') {
+          finalizeOrCancelInProgressPathRef.current?.();
+          return true;
+        }
+
+        rightClickedOverlayRef.current = { id, at: Date.now() };
+        lastOverlaySelectedAtRef.current = Date.now();
+
+        const st = useChartStore.getState();
+        if (!st.selectedOverlayIds.includes(id)) {
+          const lineStyleObj = ov?.styles?.line || {};
+          const rawExt = (ov.extendData || {}) as Record<string, any>;
+          st.setSelectedOverlay({
+            id,
+            name,
+            color: lineStyleObj.color || '#2962ff',
+            lineWidth: lineStyleObj.size || 1,
+            lineStyle: lineStyleObj.style === 'dashed' ? 'dashed' : 'solid',
+            locked: Boolean(ov.lock),
+            opacity: typeof rawExt.opacity === 'number' ? rawExt.opacity : 1,
+            label: String(rawExt.label || ''),
+            labelPosition: rawExt.labelPosition || 'top',
+          });
+          st.setSelectedOverlayIds([id]);
+        }
+        return true;
+      },
     }),
     [persistOverlay]
   );
+
+  // Unlimited Path tool lifecycle (Issue #12): finalize >= 2 committed points cleanly on Esc / Enter / Right-Click,
+  // or cancel if < 2 points were placed.
+  const finalizeOrCancelInProgressPath = useCallback((): boolean => {
+    const chart = chartRef.current;
+    const inProgId = inProgressOverlayIdRef.current;
+    if (!chart || !inProgId) {
+      cancelActiveDrawingTool();
+      return false;
+    }
+    const ov: any = chart.getOverlayById(inProgId);
+    if (!ov || ov.name !== 'pathTool') {
+      cancelActiveDrawingTool();
+      return false;
+    }
+
+    const rawPts: any[] = Array.isArray(ov.points) ? ov.points : [];
+    const currentStep: number = typeof ov.currentStep === 'number' ? ov.currentStep : rawPts.length;
+    const committedCount = Math.min(rawPts.length, Math.max(0, currentStep - 1));
+    const committedPts: Array<{ timestamp?: number; dataIndex?: number; value?: number }> = [];
+    for (let i = 0; i < committedCount; i++) {
+      const p = rawPts[i];
+      if (!p || typeof p.value !== 'number') continue;
+      const prev = committedPts[committedPts.length - 1];
+      if (
+        prev &&
+        prev.dataIndex === p.dataIndex &&
+        prev.timestamp === p.timestamp &&
+        typeof prev.value === 'number' &&
+        Math.abs(prev.value - p.value) < 1e-9
+      ) {
+        continue;
+      }
+      committedPts.push({
+        ...(typeof p.timestamp === 'number' ? { timestamp: p.timestamp } : {}),
+        ...(typeof p.dataIndex === 'number' ? { dataIndex: p.dataIndex } : {}),
+        value: p.value,
+      });
+    }
+
+    const savedStyles = ov.styles ? JSON.parse(JSON.stringify(ov.styles)) : undefined;
+    const savedExt = ov.extendData ? JSON.parse(JSON.stringify(ov.extendData)) : {};
+
+    try {
+      chart.removeOverlay({ id: inProgId });
+    } catch {}
+    inProgressOverlayIdRef.current = null;
+
+    const state = useChartStore.getState();
+    if (committedPts.length < 2) {
+      if (state.activeTool) state.setActiveTool(null);
+      return false;
+    }
+
+    const finalId = `pathTool_${Date.now()}`;
+    const maxOrder = state.drawingsList.reduce((m, d) => Math.max(m, d.sort_order ?? 0), 0);
+    chart.createOverlay({
+      id: finalId,
+      name: 'pathTool',
+      points: committedPts,
+      styles: savedStyles,
+      extendData: savedExt,
+      lock: state.drawingsLocked,
+      visible: state.drawingsVisible,
+      zLevel: maxOrder + 1,
+      ...buildOverlayEvents(),
+    });
+    const finalOv: any = chart.getOverlayById(finalId);
+    if (finalOv) {
+      persistOverlay(finalOv, true);
+      const lineStyleObj = finalOv?.styles?.line || {};
+      state.setSelectedOverlay({
+        id: finalId,
+        name: 'pathTool',
+        color: lineStyleObj.color || '#2962ff',
+        lineWidth: lineStyleObj.size || 1.8,
+        lineStyle: lineStyleObj.style === 'dashed' ? 'dashed' : 'solid',
+        locked: Boolean(finalOv.lock),
+        opacity: typeof savedExt.opacity === 'number' ? savedExt.opacity : 1,
+        label: String(savedExt.label || ''),
+        labelPosition: savedExt.labelPosition || 'top',
+      });
+    }
+
+    if (state.keepDrawingMode && state.activeTool === 'pathTool') {
+      window.setTimeout(() => {
+        const cur = useChartStore.getState();
+        if (cur.keepDrawingMode && cur.activeTool === 'pathTool' && chartRef.current) {
+          const effMagnet = cur.ctrlMagnetPressed ? 'strong_magnet' : cur.magnetMode;
+          const nextId = chartRef.current.createOverlay({
+            name: 'pathTool',
+            mode: effMagnet as any,
+            lock: cur.drawingsLocked,
+            visible: cur.drawingsVisible,
+            ...buildOverlayEvents(),
+          });
+          inProgressOverlayIdRef.current = typeof nextId === 'string' ? nextId : null;
+        }
+      }, 15);
+    } else {
+      state.setActiveTool(null);
+    }
+    return true;
+  }, [buildOverlayEvents, cancelActiveDrawingTool, persistOverlay]);
+
+  finalizeOrCancelInProgressPathRef.current = finalizeOrCancelInProgressPath;
 
   const transformForChartType = useCallback(
     (raw: Candle[]): Candle[] => {
@@ -885,11 +1140,20 @@ export const ChartContainer: React.FC = () => {
             borderSize: next.lineWidth,
           },
         };
-        chart.overrideOverlay({
+        const ovBefore: any = chart.getOverlayById(sel.id);
+        const overridePayload: any = {
           id: sel.id,
           lock: next.locked,
           styles: styleOverride,
-        });
+        };
+        if (patch.opacity !== undefined) {
+          const prevExt =
+            ovBefore?.extendData && typeof ovBefore.extendData === 'object'
+              ? ovBefore.extendData
+              : {};
+          overridePayload.extendData = { ...prevExt, opacity: patch.opacity };
+        }
+        chart.overrideOverlay(overridePayload);
         useChartStore.getState().setSelectedOverlay(next);
         const ov = chart.getOverlayById(sel.id);
         if (ov) persistOverlay(ov, false);
@@ -921,14 +1185,16 @@ export const ChartContainer: React.FC = () => {
           const sel = useChartStore.getState().selectedOverlay;
           if (sel && sel.id === id) {
             const lineStyleObj = updatedOv?.styles?.line || {};
+            const rawExt = (updatedOv.extendData || {}) as Record<string, any>;
             useChartStore.getState().setSelectedOverlay({
               ...sel,
               color: lineStyleObj.color || sel.color,
               lineWidth: lineStyleObj.size || sel.lineWidth,
               lineStyle: lineStyleObj.style === 'dashed' ? 'dashed' : 'solid',
               locked: Boolean(updatedOv.lock),
-              label: String((updatedOv.extendData as any)?.label || ''),
-              labelPosition: (updatedOv.extendData as any)?.labelPosition || sel.labelPosition,
+              opacity: typeof rawExt.opacity === 'number' ? rawExt.opacity : sel.opacity ?? 1,
+              label: String(rawExt.label || ''),
+              labelPosition: rawExt.labelPosition || sel.labelPosition,
             });
           }
           if (persist) {
@@ -940,6 +1206,12 @@ export const ChartContainer: React.FC = () => {
         const state = useChartStore.getState();
         const sel = state.selectedOverlay;
         if (!sel) return;
+        const item = state.drawingsList.find((d) => d.id === sel.id);
+        const liveOv: any = chart.getOverlayById(sel.id);
+        if (state.drawingsLocked || item?.locked || sel.locked || liveOv?.lock) {
+          state.showToast('info', 'Drawing is locked — unlock it first to delete');
+          return;
+        }
         state.pushUndoSnapshot([...state.drawingsList]);
         chart.removeOverlay({ id: sel.id });
         api.deleteDrawing(sel.id).catch(() => {});
@@ -948,15 +1220,39 @@ export const ChartContainer: React.FC = () => {
       },
       clearAllOverlays: () => {
         const state = useChartStore.getState();
-        if (state.drawingsList.length > 0) {
-          state.pushUndoSnapshot([...state.drawingsList]);
+        if (state.drawingsLocked) {
+          state.showToast('info', 'All drawings are globally locked — unlock them first to clear');
+          return;
         }
-        for (const d of state.drawingsList) {
+        const deletable = state.drawingsList.filter((d) => {
+          const liveOv: any = chart.getOverlayById(d.id);
+          return !d.locked && !liveOv?.lock;
+        });
+        const kept = state.drawingsList.filter((d) => !deletable.some((del) => del.id === d.id));
+        if (deletable.length === 0) {
+          if (state.drawingsList.length > 0) {
+            state.showToast('info', 'All drawings are locked — unlock them first to clear');
+          }
+          return;
+        }
+        state.pushUndoSnapshot([...state.drawingsList]);
+        for (const d of deletable) {
           chart.removeOverlay({ id: d.id });
         }
-        api.deleteDrawingsForSymbol(state.symbol).catch(() => {});
-        state.setDrawingsList([]);
+        if (kept.length === 0) {
+          api.deleteDrawingsForSymbol(state.symbol).catch(() => {});
+        } else {
+          for (const d of deletable) {
+            api.deleteDrawing(d.id).catch(() => {});
+          }
+          state.showToast(
+            'info',
+            `Cleared ${deletable.length} drawing(s) (kept ${kept.length} locked)`
+          );
+        }
+        state.setDrawingsList(kept);
         state.setSelectedOverlay(null);
+        state.setSelectedOverlayIds([]);
       },
       getOverlayPoints: (id: string) => {
         const ov = chart.getOverlayById(id);
@@ -972,13 +1268,12 @@ export const ChartContainer: React.FC = () => {
       },
       restoreDrawingsSnapshot: (items: DrawingItem[]) => {
         const state = useChartStore.getState();
-        // Remove all user drawings
         for (const d of state.drawingsList) {
           chart.removeOverlay({ id: d.id });
         }
         api.deleteDrawingsForSymbol(state.symbol).then(() => {
           const events = buildOverlayEvents();
-          for (const d of items) {
+          items.forEach((d, idx) => {
             try {
               chart.createOverlay({
                 id: d.id,
@@ -986,13 +1281,14 @@ export const ChartContainer: React.FC = () => {
                 points: d.points,
                 styles: d.styles,
                 extendData: d.extendData,
-                lock: d.locked,
-                visible: d.visible,
+                lock: state.drawingsLocked || d.locked,
+                visible: state.drawingsVisible && d.visible !== false,
+                zLevel: d.sort_order ?? idx + 1,
                 ...events,
               });
               api.saveDrawing(d).catch(() => {});
             } catch {}
-          }
+          });
         });
       },
       toggleSingleOverlayLock: (id: string) => {
@@ -1000,21 +1296,36 @@ export const ChartContainer: React.FC = () => {
         const target = state.drawingsList.find((d) => d.id === id);
         if (!target) return;
         const nextLocked = !target.locked;
-        chart.overrideOverlay({ id, lock: nextLocked });
-        const ov = chart.getOverlayById(id);
-        if (ov) persistOverlay(ov, false);
+        chart.overrideOverlay({ id, lock: state.drawingsLocked || nextLocked });
+        const ov: any = chart.getOverlayById(id);
+        if (ov) {
+          ov.lock = nextLocked;
+          persistOverlay(ov, false);
+        }
+        if (state.selectedOverlay?.id === id) {
+          state.setSelectedOverlay({ ...state.selectedOverlay, locked: nextLocked });
+        }
       },
       toggleSingleOverlayVisible: (id: string) => {
         const state = useChartStore.getState();
         const target = state.drawingsList.find((d) => d.id === id);
         if (!target) return;
         const nextVis = !target.visible;
-        chart.overrideOverlay({ id, visible: nextVis });
-        const ov = chart.getOverlayById(id);
-        if (ov) persistOverlay(ov, false);
+        chart.overrideOverlay({ id, visible: state.drawingsVisible && nextVis });
+        const ov: any = chart.getOverlayById(id);
+        if (ov) {
+          ov.visible = nextVis;
+          persistOverlay(ov, false);
+        }
       },
       deleteSingleOverlay: (id: string) => {
         const state = useChartStore.getState();
+        const target = state.drawingsList.find((d) => d.id === id);
+        const liveOv: any = chart.getOverlayById(id);
+        if (state.drawingsLocked || target?.locked || liveOv?.lock) {
+          state.showToast('info', 'Drawing is locked — unlock it first to delete');
+          return;
+        }
         state.pushUndoSnapshot([...state.drawingsList]);
         chart.removeOverlay({ id });
         api.deleteDrawing(id).catch(() => {});
@@ -1024,16 +1335,35 @@ export const ChartContainer: React.FC = () => {
       deleteMultipleOverlays: (ids: string[]) => {
         if (!ids || ids.length === 0) return;
         const state = useChartStore.getState();
+        if (state.drawingsLocked) {
+          state.showToast('info', 'All drawings are globally locked — unlock them first to delete');
+          return;
+        }
+        const deletable = ids.filter((id) => {
+          const item = state.drawingsList.find((d) => d.id === id);
+          const liveOv: any = chart.getOverlayById(id);
+          return !item?.locked && !liveOv?.lock;
+        });
+        const skippedCount = ids.length - deletable.length;
+        if (deletable.length === 0) {
+          state.showToast('info', 'All selected drawings are locked — unlock them first to delete');
+          return;
+        }
         state.pushUndoSnapshot([...state.drawingsList]);
-        const idSet = new Set(ids);
-        for (const id of ids) {
+        const idSet = new Set(deletable);
+        for (const id of deletable) {
           chart.removeOverlay({ id });
           api.deleteDrawing(id).catch(() => {});
         }
         state.setDrawingsList(state.drawingsList.filter((d) => !idSet.has(d.id)));
         state.setSelectedOverlay(null);
         state.setSelectedOverlayIds([]);
-        state.showToast('info', `Deleted ${ids.length} ${ids.length === 1 ? 'drawing' : 'drawings'}`);
+        state.showToast(
+          'info',
+          skippedCount > 0
+            ? `Deleted ${deletable.length} drawing(s) (skipped ${skippedCount} locked)`
+            : `Deleted ${deletable.length} ${deletable.length === 1 ? 'drawing' : 'drawings'}`
+        );
       },
       updateMultipleOverlaysStyle: (ids, patch) => {
         if (!ids || ids.length === 0) return;
@@ -1054,16 +1384,26 @@ export const ChartContainer: React.FC = () => {
               rect: { color: `${nextColor}2e`, borderColor: nextColor, borderSize: nextSize },
             };
           }
-          if (patch.locked !== undefined) overrideObj.lock = patch.locked;
-          if (patch.visible !== undefined) overrideObj.visible = patch.visible;
+          if (patch.opacity !== undefined) {
+            const prevExt =
+              ov.extendData && typeof ov.extendData === 'object' ? ov.extendData : {};
+            overrideObj.extendData = { ...prevExt, opacity: patch.opacity };
+          }
+          if (patch.locked !== undefined) overrideObj.lock = state.drawingsLocked || patch.locked;
+          if (patch.visible !== undefined) overrideObj.visible = state.drawingsVisible && patch.visible;
           chart.overrideOverlay(overrideObj);
-          const updated = chart.getOverlayById(id);
-          if (updated) persistOverlay(updated, false);
+          const updated: any = chart.getOverlayById(id);
+          if (updated) {
+            if (patch.locked !== undefined) updated.lock = patch.locked;
+            if (patch.visible !== undefined) updated.visible = patch.visible;
+            persistOverlay(updated, false);
+          }
         }
       },
       groupOverlays: (ids: string[], customName?: string) => {
-        if (!ids || ids.length < 2) return;
+        if (!ids || ids.length < 1) return;
         const state = useChartStore.getState();
+        state.pushUndoSnapshot([...state.drawingsList]);
         const existingGroups = new Set<string>();
         state.drawingsList.forEach((d) => {
           const gid = (d.extendData as any)?.groupId;
@@ -1083,11 +1423,100 @@ export const ChartContainer: React.FC = () => {
           const updated = chart.getOverlayById(id);
           if (updated) persistOverlay(updated, false);
         }
-        state.showToast('success', `Grouped ${ids.length} drawings into "${groupName}"`);
+        state.showToast(
+          'success',
+          `Grouped ${ids.length} ${ids.length === 1 ? 'drawing' : 'drawings'} into "${groupName}"`
+        );
+      },
+      addOverlaysToGroup: (ids: string[], groupId: string, groupName: string) => {
+        if (!ids || ids.length === 0 || !groupId) return;
+        const state = useChartStore.getState();
+        state.pushUndoSnapshot([...state.drawingsList]);
+        for (const id of ids) {
+          const ov: any = chart.getOverlayById(id);
+          if (!ov) continue;
+          const prevExt =
+            ov.extendData && typeof ov.extendData === 'object' ? ov.extendData : {};
+          chart.overrideOverlay({
+            id,
+            extendData: { ...prevExt, groupId, groupName },
+          });
+          const updated = chart.getOverlayById(id);
+          if (updated) persistOverlay(updated, false);
+        }
+        state.showToast('success', `Moved ${ids.length} drawing(s) into "${groupName}"`);
+      },
+      removeOverlayFromGroup: (id: string) => {
+        const state = useChartStore.getState();
+        const ov: any = chart.getOverlayById(id);
+        if (!ov) return;
+        const prevExt =
+          ov.extendData && typeof ov.extendData === 'object' ? { ...ov.extendData } : {};
+        if (!prevExt.groupId) return;
+        state.pushUndoSnapshot([...state.drawingsList]);
+        delete prevExt.groupId;
+        delete prevExt.groupName;
+        chart.overrideOverlay({ id, extendData: prevExt });
+        const updated = chart.getOverlayById(id);
+        if (updated) persistOverlay(updated, false);
+        state.showToast('info', 'Removed drawing from group');
+      },
+      cloneOverlayGroup: (groupId: string) => {
+        const state = useChartStore.getState();
+        const members = state.drawingsList.filter(
+          (d) => (d.extendData as any)?.groupId === groupId
+        );
+        if (members.length === 0) return;
+        state.pushUndoSnapshot([...state.drawingsList]);
+        const origName = String((members[0].extendData as any)?.groupName || 'Group');
+        const newGroupId = `grp_${Date.now()}`;
+        const newGroupName = `${origName} (Copy)`;
+        const events = buildOverlayEvents();
+        const priceOffset = (state.symbolInfo.point || 0.01) * 15;
+        const clonedIds: string[] = [];
+        members.forEach((m, idx) => {
+          const newId = `${m.name}_${Date.now()}_${idx}`;
+          const shiftedPts = (m.points || []).map((p) => ({
+            ...p,
+            ...(typeof p.dataIndex === 'number' ? { dataIndex: p.dataIndex + 2 } : {}),
+            ...(typeof p.value === 'number' ? { value: p.value + priceOffset } : {}),
+          }));
+          const prevExt =
+            m.extendData && typeof m.extendData === 'object'
+              ? JSON.parse(JSON.stringify(m.extendData))
+              : {};
+          chart.createOverlay({
+            id: newId,
+            name: m.name,
+            points: shiftedPts,
+            styles: m.styles ? JSON.parse(JSON.stringify(m.styles)) : undefined,
+            extendData: { ...prevExt, groupId: newGroupId, groupName: newGroupName },
+            lock: false,
+            visible: true,
+            ...events,
+          });
+          const created = chart.getOverlayById(newId);
+          if (created) {
+            persistOverlay(created, false);
+            clonedIds.push(newId);
+          }
+        });
+        if (clonedIds.length > 0) {
+          state.setSelectedOverlayIds(clonedIds);
+        }
+        state.showToast('success', `Cloned "${origName}" into "${newGroupName}"`);
+      },
+      copyOverlayById: (id: string) => {
+        const ov: any = chart.getOverlayById(id);
+        const item = ov ? serializeOverlay(ov) : null;
+        if (!item) return;
+        setCopiedClipboard({ type: 'overlay', item });
+        useChartStore.getState().showToast('info', `Copied ${item.name} — press Ctrl+V to paste`);
       },
       ungroupOverlays: (ids: string[]) => {
         if (!ids || ids.length === 0) return;
         const state = useChartStore.getState();
+        state.pushUndoSnapshot([...state.drawingsList]);
         for (const id of ids) {
           const ov: any = chart.getOverlayById(id);
           if (!ov) continue;
@@ -1125,6 +1554,7 @@ export const ChartContainer: React.FC = () => {
         const ov: any = chart.getOverlayById(id);
         if (!ov) return;
         const lineStyleObj = ov?.styles?.line || {};
+        const rawExt = (ov.extendData || {}) as Record<string, any>;
         useChartStore.getState().setSelectedOverlay({
           id: String(ov.id),
           name: String(ov.name),
@@ -1132,7 +1562,9 @@ export const ChartContainer: React.FC = () => {
           lineWidth: lineStyleObj.size || 1,
           lineStyle: lineStyleObj.style === 'dashed' ? 'dashed' : 'solid',
           locked: Boolean(ov.lock),
-          label: String((ov.extendData as any)?.label || ''),
+          opacity: typeof rawExt.opacity === 'number' ? rawExt.opacity : 1,
+          label: String(rawExt.label || ''),
+          labelPosition: rawExt.labelPosition || 'top',
         });
       },
       loadMoreDeepHistory: (bars = 5000) => {
@@ -1454,9 +1886,10 @@ export const ChartContainer: React.FC = () => {
       .getDrawings(symbol)
       .then((drawings) => {
         if (cancelled) return;
+        const st = useChartStore.getState();
         setDrawingsList(drawings);
         const events = buildOverlayEvents();
-        for (const d of drawings) {
+        drawings.forEach((d, idx) => {
           try {
             chart.createOverlay({
               id: d.id,
@@ -1464,12 +1897,13 @@ export const ChartContainer: React.FC = () => {
               points: d.points,
               styles: d.styles,
               extendData: d.extendData,
-              lock: d.locked,
-              visible: d.visible,
+              lock: st.drawingsLocked || d.locked,
+              visible: st.drawingsVisible && d.visible !== false,
+              zLevel: d.sort_order ?? idx + 1,
               ...events,
             });
           } catch {}
-        }
+        });
       })
       .catch(() => {});
 
@@ -1570,6 +2004,7 @@ export const ChartContainer: React.FC = () => {
           id: 'sys_bid_line',
           name: 'bidAskLine',
           lock: true,
+          onRightClick: () => true,
           points: [{ value: liveTick.bid }],
           extendData: {
             color: chartSettings.bidLineColor,
@@ -1583,6 +2018,7 @@ export const ChartContainer: React.FC = () => {
           id: 'sys_ask_line',
           name: 'bidAskLine',
           lock: true,
+          onRightClick: () => true,
           points: [{ value: liveTick.ask }],
           extendData: {
             color: chartSettings.askLineColor,
@@ -1633,16 +2069,30 @@ export const ChartContainer: React.FC = () => {
     inProgressOverlayIdRef.current = typeof createdId === 'string' ? createdId : null;
   }, [activeTool, buildOverlayEvents]);
 
-  // 8. Sync global drawings lock / visibility / magnet (with Ctrl temporary strong magnet)
+  // 8. Sync global drawings lock / visibility / magnet WITHOUT clobbering individual drawing lock/visible states (Issue #8)
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
     const effectiveMagnet = ctrlMagnetPressed ? 'strong_magnet' : magnetMode;
-    chart.overrideOverlay({
-      lock: drawingsLocked,
-      visible: drawingsVisible,
-      mode: effectiveMagnet as any,
-    });
+    const list = useChartStore.getState().drawingsList;
+    for (const d of list) {
+      try {
+        chart.overrideOverlay({
+          id: d.id,
+          lock: drawingsLocked || Boolean(d.locked),
+          visible: drawingsVisible && d.visible !== false,
+          mode: effectiveMagnet as any,
+        });
+      } catch {}
+    }
+    if (inProgressOverlayIdRef.current) {
+      try {
+        chart.overrideOverlay({
+          id: inProgressOverlayIdRef.current,
+          mode: effectiveMagnet as any,
+        });
+      } catch {}
+    }
   }, [drawingsLocked, drawingsVisible, magnetMode, ctrlMagnetPressed]);
 
   // 9. Sync Active Indicators
@@ -1733,6 +2183,7 @@ export const ChartContainer: React.FC = () => {
         id: 'sys_locked_cursor',
         name: 'verticalStraightLine',
         lock: true,
+        onRightClick: () => true,
         points: [{ timestamp: lockedCursorTs }],
         styles: {
           line: {
@@ -2026,7 +2477,13 @@ export const ChartContainer: React.FC = () => {
           return;
         }
         if (useChartStore.getState().activeTool || inProgressOverlayIdRef.current) {
-          cancelActiveDrawingTool();
+          finalizeOrCancelInProgressPath();
+        }
+      }
+      if (e.key === 'Enter' && !isInputFocused) {
+        if (useChartStore.getState().activeTool === 'pathTool' && inProgressOverlayIdRef.current) {
+          e.preventDefault();
+          finalizeOrCancelInProgressPath();
         }
       }
     };
@@ -2052,6 +2509,7 @@ export const ChartContainer: React.FC = () => {
     };
   }, [
     cancelActiveDrawingTool,
+    finalizeOrCancelInProgressPath,
     contextMenu,
     copiedClipboard,
     handlePasteFromClipboard,
@@ -2447,7 +2905,7 @@ export const ChartContainer: React.FC = () => {
       return;
     }
     if (state.activeTool || inProgressOverlayIdRef.current) {
-      cancelActiveDrawingTool();
+      finalizeOrCancelInProgressPath();
       return;
     }
     if (state.replay.isActive && state.replay.isSelectingCut) {
@@ -2456,13 +2914,18 @@ export const ChartContainer: React.FC = () => {
       return;
     }
 
-    // 2. Otherwise open TradingView Right-Click Chart Context Menu at clicked coordinates
+    // 2. Otherwise open Context-Aware Drawing or Chart Context Menu at clicked coordinates
     const chart = chartRef.current;
     const el = containerRef.current;
     if (!chart || !el) return;
     const rect = el.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+
+    const recentRightClick = rightClickedOverlayRef.current;
+    const targetOverlayId =
+      recentRightClick && Date.now() - recentRightClick.at < 400 ? recentRightClick.id : null;
+    rightClickedOverlayRef.current = null;
 
     let clickedPrice =
       hoverCursor?.price ??
@@ -2490,6 +2953,7 @@ export const ChartContainer: React.FC = () => {
       price: clickedPrice,
       timestamp: clickedTs,
       dataIndex: clickedIdx,
+      targetOverlayId,
     });
   };
 
@@ -2685,12 +3149,14 @@ export const ChartContainer: React.FC = () => {
         chartRef.current &&
         (() => {
           void coordTick;
+          type RectHandleKind = 'tl' | 'tr' | 'bl' | 'br' | 'tc' | 'bc' | 'ml' | 'mr';
           const handles: Array<{
             key: string;
             x: number;
             y: number;
             shape: 'circle' | 'square';
             rrExpandOverlayId?: string;
+            rectResize?: { overlayId: string; handle: RectHandleKind };
           }> = [];
           const idSet = new Set(selectedOverlayIds);
           const cw = containerRef.current?.clientWidth ?? 800;
@@ -2703,7 +3169,8 @@ export const ChartContainer: React.FC = () => {
             x: number,
             y: number,
             shape: 'circle' | 'square' = 'circle',
-            rrExpandOverlayId?: string
+            rrExpandOverlayId?: string,
+            rectResize?: { overlayId: string; handle: RectHandleKind }
           ) => {
             if (
               Number.isFinite(x) &&
@@ -2713,7 +3180,7 @@ export const ChartContainer: React.FC = () => {
               y >= 0 &&
               y <= usableH
             ) {
-              handles.push({ key, x, y, shape, rrExpandOverlayId });
+              handles.push({ key, x, y, shape, rrExpandOverlayId, rectResize });
             }
           };
 
@@ -2738,21 +3205,28 @@ export const ChartContainer: React.FC = () => {
               );
 
               if (d.name === 'rectBox' && valid.length >= 2) {
-                // TradingView 8-handle Rectangle: 4 corner circles + 4 midpoint rounded squares
+                // TradingView 8-handle Rectangle: all 4 corners + 4 edges are draggable when single-selected & unlocked (Issue #2)
                 const x1 = Math.min(valid[0].x, valid[1].x);
                 const x2 = Math.max(valid[0].x, valid[1].x);
                 const y1 = Math.min(valid[0].y, valid[1].y);
                 const y2 = Math.max(valid[0].y, valid[1].y);
                 const xm = (x1 + x2) / 2;
                 const ym = (y1 + y2) / 2;
-                pushHandle(`${d.id}_tl`, x1, y1, 'circle');
-                pushHandle(`${d.id}_tr`, x2, y1, 'circle');
-                pushHandle(`${d.id}_bl`, x1, y2, 'circle');
-                pushHandle(`${d.id}_br`, x2, y2, 'circle');
-                pushHandle(`${d.id}_tc`, xm, y1, 'square');
-                pushHandle(`${d.id}_bc`, xm, y2, 'square');
-                pushHandle(`${d.id}_ml`, x1, ym, 'square');
-                pushHandle(`${d.id}_mr`, x2, ym, 'square');
+                const canResize =
+                  selectedOverlayIds.length === 1 &&
+                  !d.locked &&
+                  !drawingsLocked &&
+                  !liveOv?.lock;
+                const mk = (handle: RectHandleKind) =>
+                  canResize ? { overlayId: d.id, handle } : undefined;
+                pushHandle(`${d.id}_tl`, x1, y1, 'circle', undefined, mk('tl'));
+                pushHandle(`${d.id}_tr`, x2, y1, 'circle', undefined, mk('tr'));
+                pushHandle(`${d.id}_bl`, x1, y2, 'circle', undefined, mk('bl'));
+                pushHandle(`${d.id}_br`, x2, y2, 'circle', undefined, mk('br'));
+                pushHandle(`${d.id}_tc`, xm, y1, 'square', undefined, mk('tc'));
+                pushHandle(`${d.id}_bc`, xm, y2, 'square', undefined, mk('bc'));
+                pushHandle(`${d.id}_ml`, x1, ym, 'square', undefined, mk('ml'));
+                pushHandle(`${d.id}_mr`, x2, ym, 'square', undefined, mk('mr'));
                 continue;
               }
 
@@ -2762,9 +3236,10 @@ export const ChartContainer: React.FC = () => {
                 const xLeft = Math.min(...valid.map((p) => p.x));
                 const xRight = Math.max(xLeft + 24, Math.max(...valid.map((p) => p.x)));
                 const ys = [valid[0].y, valid[1].y, valid[2].y].sort((a, b) => a - b);
+                const canRrExpand = !d.locked && !drawingsLocked && !liveOv?.lock;
                 pushHandle(`${d.id}_top`, xLeft, ys[0], 'square');
                 pushHandle(`${d.id}_entryL`, xLeft, ys[1], 'circle');
-                pushHandle(`${d.id}_entryR`, xRight, ys[1], 'circle', d.id);
+                pushHandle(`${d.id}_entryR`, xRight, ys[1], 'circle', canRrExpand ? d.id : undefined);
                 pushHandle(`${d.id}_bot`, xLeft, ys[2], 'square');
                 continue;
               }
@@ -2803,6 +3278,147 @@ export const ChartContainer: React.FC = () => {
               }
             } catch {}
           }
+
+          // Issue #2: Interactive 8-handle Rectangle Box resize controller (normalized TL/BR independent of draw direction)
+          const startRectBoxResize = (
+            e: React.MouseEvent<HTMLDivElement>,
+            overlayId: string,
+            handle: RectHandleKind
+          ) => {
+            e.stopPropagation();
+            e.preventDefault();
+            const chart = chartRef.current;
+            const el = containerRef.current;
+            if (!chart || !el) return;
+            const ov: any = chart.getOverlayById(overlayId);
+            const stNow = useChartStore.getState();
+            if (!ov || ov.lock || stNow.drawingsLocked || !Array.isArray(ov.points) || ov.points.length < 2) {
+              return;
+            }
+
+            const origPts = ov.points.map((p: any) => ({ ...p }));
+            const pxRaw: any = chart.convertToPixel([origPts[0], origPts[1]], { paneId: 'candle_pane' });
+            const pxArr: Array<{ x?: number; y?: number }> = Array.isArray(pxRaw) ? pxRaw : [pxRaw];
+            const px0x = pxArr[0]?.x ?? 0;
+            const px1x = pxArr[1]?.x ?? 0;
+            const px0y = pxArr[0]?.y ?? 0;
+            const px1y = pxArr[1]?.y ?? 0;
+
+            const leftAnchor = px0x <= px1x ? origPts[0] : origPts[1];
+            const rightAnchor = px0x <= px1x ? origPts[1] : origPts[0];
+            const topAnchor = px0y <= px1y ? origPts[0] : origPts[1];
+            const bottomAnchor = px0y <= px1y ? origPts[1] : origPts[0];
+
+            const baseLeftX = {
+              ...(typeof leftAnchor.timestamp === 'number' ? { timestamp: leftAnchor.timestamp } : {}),
+              ...(typeof leftAnchor.dataIndex === 'number' ? { dataIndex: leftAnchor.dataIndex } : {}),
+            };
+            const baseRightX = {
+              ...(typeof rightAnchor.timestamp === 'number' ? { timestamp: rightAnchor.timestamp } : {}),
+              ...(typeof rightAnchor.dataIndex === 'number' ? { dataIndex: rightAnchor.dataIndex } : {}),
+            };
+            const baseTopY: number = topAnchor.value;
+            const baseBotY: number = bottomAnchor.value;
+
+            const modifiesLeft = handle === 'tl' || handle === 'bl' || handle === 'ml';
+            const modifiesRight = handle === 'tr' || handle === 'br' || handle === 'mr';
+            const modifiesTop = handle === 'tl' || handle === 'tr' || handle === 'tc';
+            const modifiesBottom = handle === 'bl' || handle === 'br' || handle === 'bc';
+
+            let moved = false;
+            const undoSnap = [...stNow.drawingsList];
+            dragActiveRef.current = true;
+            lastOverlaySelectedAtRef.current = Date.now();
+
+            const onMove = (ev: MouseEvent) => {
+              const rect = el.getBoundingClientRect();
+              const mx = Math.max(0, Math.min(rect.width - axisDims.yAxisWidth, ev.clientX - rect.left));
+              const my = Math.max(0, Math.min(rect.height - axisDims.xAxisHeight, ev.clientY - rect.top));
+              try {
+                const res: any = chart.convertFromPixel([{ x: mx, y: my }], { paneId: 'candle_pane' });
+                const pt = Array.isArray(res) ? res[0] : res;
+                if (!pt) return;
+
+                let nextVal: number | undefined =
+                  typeof pt.value === 'number' && Number.isFinite(pt.value) ? pt.value : undefined;
+
+                // Optional Magnet OHLC snap on Y when Magnet mode or Ctrl is active
+                const curSt = useChartStore.getState();
+                const isMagnet = curSt.magnetMode !== 'normal' || curSt.ctrlMagnetPressed;
+                if (
+                  isMagnet &&
+                  nextVal !== undefined &&
+                  typeof pt.dataIndex === 'number' &&
+                  Number.isFinite(pt.dataIndex)
+                ) {
+                  const bar = chart.getDataList()?.[Math.round(pt.dataIndex)];
+                  if (bar) {
+                    const ohlc = [bar.open, bar.high, bar.low, bar.close];
+                    let best = nextVal;
+                    let bestDist = Infinity;
+                    for (const v of ohlc) {
+                      const dist = Math.abs(v - nextVal);
+                      if (dist < bestDist) {
+                        bestDist = dist;
+                        best = v;
+                      }
+                    }
+                    nextVal = best;
+                  }
+                }
+
+                // Do NOT retain stale timestamp when dragging into future empty space!
+                const nextX: { dataIndex?: number; timestamp?: number } = {};
+                if (typeof pt.dataIndex === 'number' && Number.isFinite(pt.dataIndex)) {
+                  nextX.dataIndex = Math.round(pt.dataIndex);
+                }
+                if (typeof pt.timestamp === 'number' && Number.isFinite(pt.timestamp)) {
+                  nextX.timestamp = pt.timestamp;
+                }
+
+                const p0: any = {
+                  ...(modifiesLeft && nextX.dataIndex !== undefined ? nextX : baseLeftX),
+                  value: modifiesTop && nextVal !== undefined ? nextVal : baseTopY,
+                };
+                const p1: any = {
+                  ...(modifiesRight && nextX.dataIndex !== undefined ? nextX : baseRightX),
+                  value: modifiesBottom && nextVal !== undefined ? nextVal : baseBotY,
+                };
+
+                if (!moved) {
+                  moved = true;
+                  curSt.pushUndoSnapshot(undoSnap);
+                }
+                chart.overrideOverlay({ id: overlayId, points: [p0, p1] });
+                setCoordTick((n) => (n + 1) % 1000000);
+              } catch {}
+            };
+
+            const onUp = () => {
+              window.removeEventListener('mousemove', onMove);
+              window.removeEventListener('mouseup', onUp);
+              lastOverlaySelectedAtRef.current = Date.now();
+              window.setTimeout(() => {
+                dragActiveRef.current = false;
+              }, 120);
+              if (moved) {
+                const updated = chart.getOverlayById(overlayId);
+                if (updated) persistOverlay(updated, false);
+              }
+              setCoordTick((n) => (n + 1) % 1000000);
+            };
+
+            window.addEventListener('mousemove', onMove);
+            window.addEventListener('mouseup', onUp);
+          };
+
+          const rectHandleCursor = (handle: RectHandleKind): string => {
+            if (handle === 'tl' || handle === 'br') return 'cursor-nwse-resize';
+            if (handle === 'tr' || handle === 'bl') return 'cursor-nesw-resize';
+            if (handle === 'tc' || handle === 'bc') return 'cursor-ns-resize';
+            return 'cursor-ew-resize';
+          };
+
           const startRrHorizontalExpand = (
             e: React.MouseEvent<HTMLDivElement>,
             overlayId: string
@@ -2813,7 +3429,15 @@ export const ChartContainer: React.FC = () => {
             const el = containerRef.current;
             if (!chart || !el) return;
             const ov: any = chart.getOverlayById(overlayId);
-            if (!ov || ov.lock || !Array.isArray(ov.points) || ov.points.length < 3) return;
+            if (
+              !ov ||
+              ov.lock ||
+              useChartStore.getState().drawingsLocked ||
+              !Array.isArray(ov.points) ||
+              ov.points.length < 3
+            ) {
+              return;
+            }
 
             dragActiveRef.current = true;
             lastOverlaySelectedAtRef.current = Date.now();
@@ -2890,7 +3514,27 @@ export const ChartContainer: React.FC = () => {
           return (
             <div className="absolute inset-0 pointer-events-none z-[26] overflow-hidden">
               {handles.map((h) =>
-                h.rrExpandOverlayId ? (
+                h.rectResize ? (
+                  <div
+                    key={h.key}
+                    data-no-marquee="true"
+                    title="Drag to resize rectangle"
+                    onMouseDown={(e) =>
+                      startRectBoxResize(e, h.rectResize!.overlayId, h.rectResize!.handle)
+                    }
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ left: `${h.x}px`, top: `${h.y}px` }}
+                    className={`absolute -translate-x-1/2 -translate-y-1/2 w-[18px] h-[18px] flex items-center justify-center pointer-events-auto group ${rectHandleCursor(
+                      h.rectResize.handle
+                    )}`}
+                  >
+                    <span
+                      className={`w-[10px] h-[10px] bg-white border-[2px] border-[#2962ff] shadow-sm group-hover:scale-125 transition-transform ${
+                        h.shape === 'square' ? 'rounded-[2px]' : 'rounded-full'
+                      }`}
+                    />
+                  </div>
+                ) : h.rrExpandOverlayId ? (
                   <div
                     key={h.key}
                     data-no-marquee="true"
@@ -2915,6 +3559,14 @@ export const ChartContainer: React.FC = () => {
             </div>
           );
         })()}
+
+      {/* Unlimited Path Tool Hint Pill (Issue #12) */}
+      {activeTool === 'pathTool' && (
+        <div className="absolute bottom-9 left-1/2 -translate-x-1/2 z-[28] pointer-events-none px-3 py-1 rounded-full bg-[#1e222d]/95 border border-[#2962ff]/50 text-[11px] text-[#d1d4dc] shadow-tv backdrop-blur-sm">
+          <span className="text-[#2962ff] font-semibold">Path:</span> Click to add unlimited points
+          {' · '}Double-click / Right-click / Esc / Enter to finish
+        </div>
+      )}
 
       {/* Ctrl + Drag Blue Translucent Multi-Select Marquee Box */}
       {marqueeBox && (

@@ -73,6 +73,8 @@ class DrawingModel(BaseModel):
     label: Optional[str] = None
     locked: bool = False
     visible: bool = True
+    sort_order: Optional[int] = None
+    created_at: Optional[int] = None
     updated_at: Optional[int] = None
 
 

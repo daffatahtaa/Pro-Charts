@@ -18,6 +18,7 @@ import {
   ChevronRight,
   Pencil,
   GripVertical,
+  Copy,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useChartStore } from '../store/useChartStore';
@@ -46,6 +47,11 @@ export const RightWatchlist: React.FC = () => {
     setSymbolModalOpen,
     mt5Status,
     drawingsList,
+    drawingGroups,
+    drawingsLocked,
+    addEmptyDrawingGroup,
+    renameEmptyDrawingGroup,
+    removeEmptyDrawingGroup,
     selectedOverlayIds,
     setSelectedOverlayIds,
     toggleSelectedOverlayId,
@@ -63,6 +69,8 @@ export const RightWatchlist: React.FC = () => {
   const [collapsedObjGroups, setCollapsedObjGroups] = useState<Record<string, boolean>>({});
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState('');
+  const [draggingDrawingId, setDraggingDrawingId] = useState<string | null>(null);
+  const [dropTargetGroupId, setDropTargetGroupId] = useState<string | null>(null);
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
   const rowRefs = useRef<Array<HTMLDivElement | null>>([]);
   const suppressClickRef = useRef(false);
@@ -432,14 +440,41 @@ export const RightWatchlist: React.FC = () => {
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="px-3 py-1.5 border-b border-[#2a2e39] flex items-center justify-between text-[11px] text-[#787b86]">
             <span>Drawings on {symbol}</span>
-            {drawingsList.length > 0 && (
+            <div className="flex items-center gap-2">
               <button
-                onClick={() => bridge.clearAllOverlays?.()}
-                className="text-[#f23645] hover:underline text-[10.5px] cursor-pointer"
+                onClick={() => {
+                  const defaultName = `Group ${
+                    drawingGroups.filter((g) => g.symbol === symbol).length +
+                    new Set(
+                      drawingsList
+                        .map((d) => (d.extendData as any)?.groupId)
+                        .filter(Boolean)
+                    ).size +
+                    1
+                  }`;
+                  const name = window.prompt('New group folder name:', defaultName);
+                  if (!name || !name.trim()) return;
+                  if (selectedOverlayIds.length >= 1) {
+                    bridge.groupOverlays?.(selectedOverlayIds, name.trim());
+                  } else {
+                    addEmptyDrawingGroup(symbol, name.trim());
+                  }
+                }}
+                title="Create New Group Folder (from selection or empty)"
+                className="flex items-center gap-0.5 text-[#2962ff] hover:underline text-[10.5px] font-medium cursor-pointer"
               >
-                Clear All
+                <FolderPlus className="w-3 h-3" />
+                <span>New Group</span>
               </button>
-            )}
+              {drawingsList.length > 0 && (
+                <button
+                  onClick={() => bridge.clearAllOverlays?.()}
+                  className="text-[#f23645] hover:underline text-[10.5px] cursor-pointer"
+                >
+                  Clear All
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Multi-Select Batch Action Bar */}
@@ -466,7 +501,8 @@ export const RightWatchlist: React.FC = () => {
           )}
 
           <div className="flex-1 overflow-y-auto divide-y divide-[#2a2e39]/40">
-            {drawingsList.length === 0 ? (
+            {drawingsList.length === 0 &&
+            drawingGroups.filter((g) => g.symbol === symbol).length === 0 ? (
               <div className="p-6 text-center text-[11.5px] text-[#787b86]">
                 No drawings on {symbol}. Draw lines, zones, or R:R boxes to manage them here.
               </div>
@@ -474,9 +510,21 @@ export const RightWatchlist: React.FC = () => {
               (() => {
                 const groupsMap = new Map<
                   string,
-                  { groupId: string; groupName: string; items: DrawingItem[] }
+                  { groupId: string; groupName: string; items: DrawingItem[]; isEmptyFolder?: boolean }
                 >();
                 const ungrouped: DrawingItem[] = [];
+
+                // Include persisted empty group folders for this symbol
+                for (const g of drawingGroups) {
+                  if (g.symbol === symbol) {
+                    groupsMap.set(g.id, {
+                      groupId: g.id,
+                      groupName: g.name,
+                      items: [],
+                      isEmptyFolder: true,
+                    });
+                  }
+                }
 
                 for (const d of drawingsList) {
                   const gid = (d.extendData as any)?.groupId as string | undefined;
@@ -485,6 +533,7 @@ export const RightWatchlist: React.FC = () => {
                     const existing = groupsMap.get(gid);
                     if (existing) {
                       existing.items.push(d);
+                      existing.isEmptyFolder = false;
                     } else {
                       groupsMap.set(gid, { groupId: gid, groupName: gName, items: [d] });
                     }
@@ -496,9 +545,21 @@ export const RightWatchlist: React.FC = () => {
                 const renderDrawingRow = (d: DrawingItem, indented = false) => {
                   const label = (d.extendData as any)?.label || d.label || '';
                   const isMultiSelected = selectedOverlayIds.includes(d.id);
+                  const isRowLocked = drawingsLocked || d.locked;
+                  const rowColor = (d.styles as any)?.line?.color || '#2962ff';
                   return (
                     <div
                       key={d.id}
+                      draggable
+                      onDragStart={(e) => {
+                        setDraggingDrawingId(d.id);
+                        e.dataTransfer.effectAllowed = 'move';
+                        e.dataTransfer.setData('text/plain', d.id);
+                      }}
+                      onDragEnd={() => {
+                        setDraggingDrawingId(null);
+                        setDropTargetGroupId(null);
+                      }}
                       onClick={(e) => {
                         if (e.ctrlKey || e.metaKey) {
                           toggleSelectedOverlayId(d.id);
@@ -506,40 +567,58 @@ export const RightWatchlist: React.FC = () => {
                           bridge.selectOverlayById?.(d.id);
                         }
                       }}
-                      className={`${
+                      className={`group ${
                         indented ? 'pl-6 pr-3' : 'px-3'
                       } py-2 flex items-center justify-between gap-2 cursor-pointer transition-colors ${
+                        draggingDrawingId === d.id ? 'opacity-50' : ''
+                      } ${
                         isMultiSelected
                           ? 'bg-[#2962ff]/15 border-l-2 border-l-[#2962ff]'
                           : 'hover:bg-[#2a2e39]/60 border-l-2 border-l-transparent'
                       }`}
-                      title="Click to select · Ctrl+Click to multi-select"
+                      title="Click to select · Ctrl+Click multi-select · Drag to move into/out of a group"
                     >
-                      <div className="min-w-0 flex flex-col">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[12px] font-medium text-[#d1d4dc] truncate">
-                            {d.name}
-                          </span>
-                          {label && (
-                            <span className="px-1.5 py-0.5 rounded bg-[#f59e0b]/20 text-[#f59e0b] text-[10px] font-semibold truncate max-w-[90px]">
-                              {label}
+                      <div className="min-w-0 flex items-center gap-1.5">
+                        <GripVertical className="w-3 h-3 text-[#787b86]/60 shrink-0 cursor-grab" />
+                        <span
+                          className="w-2 h-2 rounded-full shrink-0"
+                          style={{ backgroundColor: rowColor }}
+                        />
+                        <div className="min-w-0 flex flex-col">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[12px] font-medium text-[#d1d4dc] truncate">
+                              {d.name}
                             </span>
-                          )}
+                            {label && (
+                              <span className="px-1.5 py-0.5 rounded bg-[#f59e0b]/20 text-[#f59e0b] text-[10px] font-semibold truncate max-w-[90px]">
+                                {label}
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[10px] text-[#787b86] font-mono-num">
+                            {d.timeframe}
+                          </span>
                         </div>
-                        <span className="text-[10px] text-[#787b86] font-mono-num">
-                          {d.timeframe}
-                        </span>
                       </div>
 
                       <div
                         className="flex items-center gap-1 shrink-0"
                         onClick={(e) => e.stopPropagation()}
                       >
+                        {indented && (
+                          <button
+                            onClick={() => bridge.removeOverlayFromGroup?.(d.id)}
+                            title="Remove from group"
+                            className="p-1 rounded text-[#787b86] hover:text-[#f59e0b] opacity-0 group-hover:opacity-100 cursor-pointer"
+                          >
+                            <FolderMinus className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         <button
                           onClick={() => bridge.toggleSingleOverlayLock?.(d.id)}
                           title={d.locked ? 'Unlock' : 'Lock'}
                           className={`p-1 rounded cursor-pointer ${
-                            d.locked ? 'text-[#2962ff]' : 'text-[#787b86] hover:text-[#d1d4dc]'
+                            d.locked ? 'text-[#f59e0b]' : 'text-[#787b86] hover:text-[#d1d4dc]'
                           }`}
                         >
                           {d.locked ? (
@@ -563,8 +642,13 @@ export const RightWatchlist: React.FC = () => {
                         </button>
                         <button
                           onClick={() => bridge.deleteSingleOverlay?.(d.id)}
-                          title="Delete"
-                          className="p-1 rounded text-[#787b86] hover:text-[#f23645] cursor-pointer"
+                          disabled={isRowLocked}
+                          title={isRowLocked ? 'Unlock to delete' : 'Delete'}
+                          className={`p-1 rounded ${
+                            isRowLocked
+                              ? 'text-[#787b86] opacity-35 cursor-not-allowed'
+                              : 'text-[#787b86] hover:text-[#f23645] cursor-pointer'
+                          }`}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -575,20 +659,53 @@ export const RightWatchlist: React.FC = () => {
 
                 return (
                   <>
-                    {/* Collapsible Group Folders */}
+                    {/* Collapsible Group Folders (Drop Targets) */}
                     {Array.from(groupsMap.values()).map((grp) => {
                       const isCollapsed = Boolean(collapsedObjGroups[grp.groupId]);
                       const memberIds = grp.items.map((i) => i.id);
-                      const allLocked = grp.items.every((i) => i.locked);
+                      const allLocked =
+                        drawingsLocked ||
+                        (grp.items.length > 0 && grp.items.every((i) => i.locked));
                       const allVisible = grp.items.every((i) => i.visible !== false);
                       const allSelected =
                         memberIds.length > 0 &&
                         memberIds.every((id) => selectedOverlayIds.includes(id));
+                      const isDropTarget = dropTargetGroupId === grp.groupId;
 
                       return (
-                        <div key={grp.groupId} className="bg-[#131722]/40">
+                        <div
+                          key={grp.groupId}
+                          onDragOver={(e) => {
+                            if (!draggingDrawingId) return;
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = 'move';
+                            if (dropTargetGroupId !== grp.groupId) {
+                              setDropTargetGroupId(grp.groupId);
+                            }
+                          }}
+                          onDragLeave={() => {
+                            if (dropTargetGroupId === grp.groupId) {
+                              setDropTargetGroupId(null);
+                            }
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            const draggedId =
+                              draggingDrawingId || e.dataTransfer.getData('text/plain');
+                            setDraggingDrawingId(null);
+                            setDropTargetGroupId(null);
+                            if (draggedId) {
+                              bridge.addOverlaysToGroup?.([draggedId], grp.groupId, grp.groupName);
+                            }
+                          }}
+                          className={`bg-[#131722]/40 transition-all ${
+                            isDropTarget ? 'ring-2 ring-inset ring-[#2962ff] bg-[#2962ff]/10' : ''
+                          }`}
+                        >
                           <div
-                            onClick={() => setSelectedOverlayIds(memberIds)}
+                            onClick={() => {
+                              if (memberIds.length > 0) setSelectedOverlayIds(memberIds);
+                            }}
                             className={`group px-2 py-1.5 flex items-center justify-between gap-1 cursor-pointer ${
                               allSelected
                                 ? 'bg-[#2962ff]/20 border-l-2 border-l-[#2962ff]'
@@ -625,6 +742,10 @@ export const RightWatchlist: React.FC = () => {
                                         grp.groupId,
                                         editingGroupName.trim()
                                       );
+                                      renameEmptyDrawingGroup(
+                                        grp.groupId,
+                                        editingGroupName.trim()
+                                      );
                                     }
                                     setEditingGroupId(null);
                                   }}
@@ -632,6 +753,10 @@ export const RightWatchlist: React.FC = () => {
                                     if (e.key === 'Enter') {
                                       if (editingGroupName.trim()) {
                                         bridge.renameOverlayGroup?.(
+                                          grp.groupId,
+                                          editingGroupName.trim()
+                                        );
+                                        renameEmptyDrawingGroup(
                                           grp.groupId,
                                           editingGroupName.trim()
                                         );
@@ -650,7 +775,7 @@ export const RightWatchlist: React.FC = () => {
                                     setEditingGroupId(grp.groupId);
                                     setEditingGroupName(grp.groupName);
                                   }}
-                                  title="Click to select group · Double-click to rename"
+                                  title="Click to select group · Double-click to rename · Drop drawings here"
                                   className="text-[11.5px] font-semibold text-[#d1d4dc] truncate"
                                 >
                                   {grp.groupName}{' '}
@@ -675,55 +800,87 @@ export const RightWatchlist: React.FC = () => {
                               >
                                 <Pencil className="w-3 h-3" />
                               </button>
+                              {memberIds.length > 0 && (
+                                <button
+                                  onClick={() => bridge.cloneOverlayGroup?.(grp.groupId)}
+                                  title="Clone group"
+                                  className="p-0.5 rounded text-[#787b86] hover:text-[#2962ff] opacity-0 group-hover:opacity-100 cursor-pointer"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                </button>
+                              )}
+                              {memberIds.length > 0 && (
+                                <>
+                                  <button
+                                    onClick={() =>
+                                      bridge.updateMultipleOverlaysStyle?.(memberIds, {
+                                        locked: !allLocked,
+                                      })
+                                    }
+                                    title={allLocked ? 'Unlock group' : 'Lock group'}
+                                    className={`p-0.5 rounded cursor-pointer ${
+                                      allLocked
+                                        ? 'text-[#f59e0b]'
+                                        : 'text-[#787b86] hover:text-[#d1d4dc]'
+                                    }`}
+                                  >
+                                    {allLocked ? (
+                                      <Lock className="w-3 h-3" />
+                                    ) : (
+                                      <Unlock className="w-3 h-3" />
+                                    )}
+                                  </button>
+                                  <button
+                                    onClick={() =>
+                                      bridge.updateMultipleOverlaysStyle?.(memberIds, {
+                                        visible: !allVisible,
+                                      })
+                                    }
+                                    title={allVisible ? 'Hide group' : 'Show group'}
+                                    className={`p-0.5 rounded cursor-pointer ${
+                                      !allVisible
+                                        ? 'text-[#2962ff]'
+                                        : 'text-[#787b86] hover:text-[#d1d4dc]'
+                                    }`}
+                                  >
+                                    {allVisible ? (
+                                      <Eye className="w-3 h-3" />
+                                    ) : (
+                                      <EyeOff className="w-3 h-3" />
+                                    )}
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      bridge.ungroupOverlays?.(memberIds);
+                                      removeEmptyDrawingGroup(grp.groupId);
+                                    }}
+                                    title="Ungroup folder"
+                                    className="p-0.5 rounded text-[#787b86] hover:text-[#f59e0b] cursor-pointer"
+                                  >
+                                    <FolderMinus className="w-3 h-3" />
+                                  </button>
+                                </>
+                              )}
                               <button
-                                onClick={() =>
-                                  bridge.updateMultipleOverlaysStyle?.(memberIds, {
-                                    locked: !allLocked,
-                                  })
+                                disabled={memberIds.length > 0 && allLocked}
+                                onClick={() => {
+                                  if (memberIds.length > 0) {
+                                    bridge.deleteMultipleOverlays?.(memberIds);
+                                  }
+                                  removeEmptyDrawingGroup(grp.groupId);
+                                }}
+                                title={
+                                  memberIds.length > 0 && allLocked
+                                    ? 'Unlock group to delete'
+                                    : memberIds.length === 0
+                                    ? 'Remove empty folder'
+                                    : 'Delete entire group'
                                 }
-                                title={allLocked ? 'Unlock group' : 'Lock group'}
-                                className={`p-0.5 rounded cursor-pointer ${
-                                  allLocked
-                                    ? 'text-[#f59e0b]'
-                                    : 'text-[#787b86] hover:text-[#d1d4dc]'
+                                className={`p-0.5 rounded ${
+                                  memberIds.length > 0 && allLocked
+                                    ? 'text-[#787b86] opacity-35 cursor-not-allowed'
+                                    : 'text-[#787b86] hover:text-[#f23645] cursor-pointer'
                                 }`}
-                              >
-                                {allLocked ? (
-                                  <Lock className="w-3 h-3" />
-                                ) : (
-                                  <Unlock className="w-3 h-3" />
-                                )}
-                              </button>
-                              <button
-                                onClick={() =>
-                                  bridge.updateMultipleOverlaysStyle?.(memberIds, {
-                                    visible: !allVisible,
-                                  })
-                                }
-                                title={allVisible ? 'Hide group' : 'Show group'}
-                                className={`p-0.5 rounded cursor-pointer ${
-                                  !allVisible
-                                    ? 'text-[#2962ff]'
-                                    : 'text-[#787b86] hover:text-[#d1d4dc]'
-                                }`}
-                              >
-                                {allVisible ? (
-                                  <Eye className="w-3 h-3" />
-                                ) : (
-                                  <EyeOff className="w-3 h-3" />
-                                )}
-                              </button>
-                              <button
-                                onClick={() => bridge.ungroupOverlays?.(memberIds)}
-                                title="Ungroup folder"
-                                className="p-0.5 rounded text-[#787b86] hover:text-[#f59e0b] cursor-pointer"
-                              >
-                                <FolderMinus className="w-3 h-3" />
-                              </button>
-                              <button
-                                onClick={() => bridge.deleteMultipleOverlays?.(memberIds)}
-                                title="Delete entire group"
-                                className="p-0.5 rounded text-[#787b86] hover:text-[#f23645] cursor-pointer"
                               >
                                 <Trash2 className="w-3 h-3" />
                               </button>
@@ -732,15 +889,57 @@ export const RightWatchlist: React.FC = () => {
 
                           {!isCollapsed && (
                             <div className="divide-y divide-[#2a2e39]/30">
-                              {grp.items.map((item) => renderDrawingRow(item, true))}
+                              {grp.items.length === 0 ? (
+                                <div className="pl-7 pr-3 py-2 text-[10.5px] italic text-[#787b86]">
+                                  Drag drawings here to add to group
+                                </div>
+                              ) : (
+                                grp.items.map((item) => renderDrawingRow(item, true))
+                              )}
                             </div>
                           )}
                         </div>
                       );
                     })}
 
-                    {/* Ungrouped Drawings */}
-                    {ungrouped.map((d) => renderDrawingRow(d, false))}
+                    {/* Ungrouped Drawings + Ungroup Drop Zone */}
+                    <div
+                      onDragOver={(e) => {
+                        if (!draggingDrawingId) return;
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'move';
+                        if (dropTargetGroupId !== '__ungrouped__') {
+                          setDropTargetGroupId('__ungrouped__');
+                        }
+                      }}
+                      onDragLeave={() => {
+                        if (dropTargetGroupId === '__ungrouped__') {
+                          setDropTargetGroupId(null);
+                        }
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const draggedId =
+                          draggingDrawingId || e.dataTransfer.getData('text/plain');
+                        setDraggingDrawingId(null);
+                        setDropTargetGroupId(null);
+                        if (draggedId) {
+                          bridge.removeOverlayFromGroup?.(draggedId);
+                        }
+                      }}
+                      className={`divide-y divide-[#2a2e39]/40 min-h-[32px] transition-all ${
+                        dropTargetGroupId === '__ungrouped__'
+                          ? 'ring-2 ring-inset ring-[#2962ff] bg-[#2962ff]/10'
+                          : ''
+                      }`}
+                    >
+                      {groupsMap.size > 0 && draggingDrawingId && (
+                        <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-[#2962ff] bg-[#2962ff]/5">
+                          Drop here to ungroup
+                        </div>
+                      )}
+                      {ungrouped.map((d) => renderDrawingRow(d, false))}
+                    </div>
                   </>
                 );
               })()

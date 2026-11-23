@@ -281,27 +281,47 @@ export const rotatedRectangleOverlay: OverlayTemplate = {
   },
 };
 
-/** 8. Path (`pathTool`) — 5-point connected path with arrowhead at last vertex */
+/** 8. Path (`pathTool`) — unlimited connected points with arrowhead at last vertex until finished/cancelled */
 export const pathToolOverlay: OverlayTemplate = {
   name: 'pathTool',
-  totalStep: 6,
+  totalStep: 10000,
   needDefaultPointFigure: true,
   needDefaultXAxisFigure: true,
   needDefaultYAxisFigure: true,
   createPointFigures: ({ coordinates, overlay }) => {
     if (coordinates.length < 2) return [];
     if (!isOverlayVisibleForTimeframe(overlay.extendData)) return [];
-    const color = (overlay.styles as any)?.line?.color || '#2962ff';
+    const lineStyle = (overlay.styles as any)?.line || {};
+    const color = lineStyle.color || '#2962ff';
+    const size = toHairlineSize(lineStyle.size || 1.8);
+    const style = lineStyle.style || 'solid';
+    const dashedValue = lineStyle.dashedValue || [4, 4];
+
     const last = coordinates[coordinates.length - 1];
-    const prev = coordinates[coordinates.length - 2];
-    return [
-      { type: 'line', attrs: { coordinates }, styles: { color, size: 1.8 } },
+    // Walk backward to find the last distinct vertex so duplicate double-click vertices don't collapse the arrowhead
+    let prev = coordinates[coordinates.length - 2];
+    for (let i = coordinates.length - 2; i >= 0; i--) {
+      const c = coordinates[i];
+      if (Math.hypot(last.x - c.x, last.y - c.y) > 0.5) {
+        prev = c;
+        break;
+      }
+    }
+    const figures: any[] = [
       {
+        type: 'line',
+        attrs: { coordinates },
+        styles: { color, size, style, dashedValue },
+      },
+    ];
+    if (Math.hypot(last.x - prev.x, last.y - prev.y) > 0.5) {
+      figures.push({
         type: 'polygon',
         attrs: { coordinates: makeArrowheadPolygon(prev, last, 11, 5) },
         styles: { style: 'fill', color },
-      },
-    ];
+      });
+    }
+    return figures;
   },
 };
 

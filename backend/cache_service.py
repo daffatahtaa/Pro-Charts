@@ -72,8 +72,37 @@ class CacheService:
                     extend_data_json VARCHAR DEFAULT '{}',
                     locked BOOLEAN DEFAULT FALSE,
                     visible BOOLEAN DEFAULT TRUE,
+                    sort_order INTEGER DEFAULT 0,
+                    created_at BIGINT DEFAULT 0,
                     updated_at BIGINT NOT NULL
                 );
+                """
+            )
+            # Idempotent schema migrations for existing DuckDB files (preserve Z-order across edits/hides)
+            self.conn.execute(
+                "ALTER TABLE chart_drawings ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0;"
+            )
+            self.conn.execute(
+                "ALTER TABLE chart_drawings ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0;"
+            )
+            self.conn.execute(
+                """
+                WITH ranked AS (
+                    SELECT id,
+                           ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY updated_at ASC, id ASC) AS rn,
+                           updated_at
+                    FROM chart_drawings
+                    WHERE sort_order IS NULL OR sort_order = 0
+                )
+                UPDATE chart_drawings
+                SET sort_order = ranked.rn,
+                    created_at = CASE
+                        WHEN chart_drawings.created_at IS NULL OR chart_drawings.created_at = 0
+                        THEN ranked.updated_at
+                        ELSE chart_drawings.created_at
+                    END
+                FROM ranked
+                WHERE chart_drawings.id = ranked.id;
                 """
             )
             self.conn.execute(
@@ -525,10 +554,10 @@ class CacheService:
             rows = self.conn.execute(
                 """
                 SELECT id, symbol, timeframe, name, points_json, styles_json,
-                       extend_data_json, locked, visible, updated_at
+                       extend_data_json, locked, visible, updated_at, sort_order, created_at
                 FROM chart_drawings
                 WHERE symbol = ?
-                ORDER BY updated_at ASC
+                ORDER BY sort_order ASC, created_at ASC, id ASC
                 """,
                 (symbol,),
             ).fetchall()
@@ -547,6 +576,8 @@ class CacheService:
                     "locked": bool(r[7]),
                     "visible": bool(r[8]),
                     "updated_at": int(r[9]),
+                    "sort_order": int(r[10] or 0),
+                    "created_at": int(r[11] or r[9]),
                 }
             )
         return results
@@ -554,12 +585,36 @@ class CacheService:
     def upsert_drawing(self, drawing: DrawingModel) -> Dict[str, Any]:
         now_ms = int(time.time() * 1000)
         with self._lock:
+            existing = self.conn.execute(
+                "SELECT sort_order, created_at FROM chart_drawings WHERE id = ?",
+                (drawing.id,),
+            ).fetchone()
+            if existing:
+                prev_sort = int(existing[0] or 0)
+                prev_created = int(existing[1] or now_ms)
+                sort_order = (
+                    int(drawing.sort_order)
+                    if (drawing.sort_order is not None and drawing.sort_order > 0)
+                    else prev_sort
+                )
+                created_at = prev_created if prev_created > 0 else (drawing.created_at or now_ms)
+            else:
+                if drawing.sort_order is not None and drawing.sort_order > 0:
+                    sort_order = int(drawing.sort_order)
+                else:
+                    max_row = self.conn.execute(
+                        "SELECT COALESCE(MAX(sort_order), 0) FROM chart_drawings WHERE symbol = ?",
+                        (drawing.symbol,),
+                    ).fetchone()
+                    sort_order = int(max_row[0] or 0) + 1
+                created_at = int(drawing.created_at) if drawing.created_at else now_ms
+
             self.conn.execute(
                 """
                 INSERT OR REPLACE INTO chart_drawings
                     (id, symbol, timeframe, name, points_json, styles_json,
-                     extend_data_json, locked, visible, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     extend_data_json, locked, visible, sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     drawing.id,
@@ -571,10 +626,14 @@ class CacheService:
                     json.dumps(drawing.extendData if drawing.extendData is not None else {}),
                     bool(drawing.locked),
                     bool(drawing.visible),
+                    sort_order,
+                    created_at,
                     now_ms,
                 ),
             )
         data = drawing.model_dump()
+        data["sort_order"] = sort_order
+        data["created_at"] = created_at
         data["updated_at"] = now_ms
         return data
 
