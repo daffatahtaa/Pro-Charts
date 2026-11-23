@@ -1,5 +1,7 @@
 import {
   BacktestAnalytics,
+  BulkModifyPayload,
+  BulkTradeResult,
   Candle,
   DrawingItem,
   ModifyPositionPayload,
@@ -171,6 +173,22 @@ export const api = {
   closePosition(ticket: number): Promise<TradeResultResponse> {
     return fetchJson<TradeResultResponse>(`${API_BASE}/mt5/trade/close/${ticket}`, {
       method: 'POST',
+    });
+  },
+
+  bulkClosePosition(tickets: number[]): Promise<BulkTradeResult> {
+    return fetchJson<BulkTradeResult>(`${API_BASE}/mt5/trade/bulk/close`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tickets }),
+    });
+  },
+
+  bulkModifyTrade(payload: BulkModifyPayload): Promise<BulkTradeResult> {
+    return fetchJson<BulkTradeResult>(`${API_BASE}/mt5/trade/bulk/modify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
   },
 

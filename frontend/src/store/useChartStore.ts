@@ -436,6 +436,15 @@ interface ChartStore {
   closeWorkspaceTab: (tabId: string) => void;
   updatePaperTradeSlTp: (tradeId: string, sl: number, tp: number) => void;
   modifyPaperTrade: (tradeId: string, patch: { entry_price?: number; sl?: number; tp?: number }) => void;
+  bulkPaperModify: (ids: string[], patch: { sl?: number; tp?: number }) => void;
+  bulkPaperClose: (ids: string[]) => void;
+  bulkScope: 'all' | 'pair' | 'selected';
+  bulkPairFilter: string;
+  selectedTickets: number[];
+  setBulkScope: (s: 'all' | 'pair' | 'selected') => void;
+  setBulkPairFilter: (s: string) => void;
+  toggleBulkTicket: (ticket: number) => void;
+  setBulkTickets: (tickets: number[]) => void;
   placePaperOrder: (payload: {
     side: 'BUY' | 'SELL';
     order_mode: 'MARKET' | 'PENDING';
@@ -2168,6 +2177,86 @@ export const useChartStore = create<ChartStore>((set, get) => ({
         }),
       },
     });
+    get().syncPaperBacktest();
+  },
+
+  bulkPaperModify: (ids, patch) => {
+    const state = get();
+    const idSet = new Set(ids);
+    set({
+      paperAccount: {
+        ...state.paperAccount,
+        trades: state.paperAccount.trades.map((t) => {
+          if (!idSet.has(t.id) || t.status !== 'OPEN') return t;
+          return {
+            ...t,
+            sl: patch.sl !== undefined ? (patch.sl > 0 ? patch.sl : 0) : t.sl,
+            tp: patch.tp !== undefined ? (patch.tp > 0 ? patch.tp : 0) : t.tp,
+          };
+        }),
+      },
+    });
+    get().syncPaperBacktest();
+  },
+
+  bulkScope: 'all',
+  bulkPairFilter: '',
+  selectedTickets: [],
+  setBulkScope: (s) => set({ bulkScope: s }),
+  setBulkPairFilter: (s) => set({ bulkPairFilter: s }),
+  toggleBulkTicket: (ticket) =>
+    set((state) => ({
+      selectedTickets: state.selectedTickets.includes(ticket)
+        ? state.selectedTickets.filter((t) => t !== ticket)
+        : [...state.selectedTickets, ticket],
+    })),
+  setBulkTickets: (tickets) => set({ selectedTickets: tickets }),
+
+  bulkPaperClose: (ids) => {
+    const state = get();
+    const idSet = new Set(ids);
+    const curCandle =
+      state.replay.allCandles[state.replay.cutIndex] ||
+      state.candles[state.candles.length - 1];
+    if (!curCandle) return;
+    const pipSize = (state.symbolInfo.point || 0.01) * 10;
+    let updatedBalance = state.paperAccount.balance;
+
+    const nextTrades = state.paperAccount.trades.map((tr) => {
+      if (!idSet.has(tr.id) || tr.status !== 'OPEN') return tr;
+      const isBuy = tr.side === 'BUY';
+      const exitP = curCandle.close;
+      const rawDiff = isBuy ? exitP - tr.entry_price : tr.entry_price - exitP;
+      const slDist = tr.sl > 0 ? Math.abs(tr.entry_price - tr.sl) : 0;
+      const pnlPips = Number((rawDiff / pipSize).toFixed(1));
+      const rMult =
+        slDist > 0 ? Number((rawDiff / slDist).toFixed(2)) : Number((pnlPips / 20).toFixed(2));
+      const pnlMoney = Number((rMult * tr.risk_amount).toFixed(2));
+      updatedBalance = Number((updatedBalance + pnlMoney).toFixed(2));
+      return {
+        ...tr,
+        status: 'CLOSED_MANUAL' as const,
+        exit_price: exitP,
+        close_time_ms: curCandle.timestamp,
+        pnl_pips: pnlPips,
+        realized_r: rMult,
+        pnl_money: pnlMoney,
+      };
+    });
+
+    const floating = nextTrades
+      .filter((t) => t.status === 'OPEN')
+      .reduce((acc, t) => acc + t.pnl_money, 0);
+
+    set({
+      paperAccount: {
+        ...state.paperAccount,
+        balance: updatedBalance,
+        equity: Number((updatedBalance + floating).toFixed(2)),
+        trades: nextTrades,
+      },
+    });
+    get().showToast('success', `${ids.length} paper position(s) closed at current replay bar.`);
     get().syncPaperBacktest();
   },
 

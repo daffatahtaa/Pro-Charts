@@ -338,6 +338,18 @@ export interface ModifyPositionPayload {
   is_pending?: boolean;
 }
 
+export interface BulkModifyPayload {
+  tickets: number[];
+  sl?: number;
+  tp?: number;
+}
+
+export interface BulkTradeResult {
+  success: boolean;
+  results: TradeResultResponse[];
+  message: string;
+}
+
 export type PaneId = 'pane-1' | 'pane-2' | 'pane-3' | 'pane-4';
 export type SecondaryPaneId = 'pane-2' | 'pane-3' | 'pane-4';
 

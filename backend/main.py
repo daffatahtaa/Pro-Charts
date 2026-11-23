@@ -22,6 +22,9 @@ from models import (
     BacktestAnalyticsResponse,
     BacktestSessionSyncRequest,
     BrokerInfoModel,
+    BulkCloseRequest,
+    BulkModifyRequest,
+    BulkResultResponse,
     CandlesResponse,
     CustomServerRequest,
     DailyNoteRequest,
@@ -123,6 +126,22 @@ async def modify_trade_position(req: ModifyPositionRequest):
 async def close_trade_position(ticket: int):
     res = await asyncio.to_thread(mt5_service.close_position, ticket)
     return TradeResultResponse(**res)
+
+
+@app.post("/api/mt5/trade/bulk/close", response_model=BulkResultResponse)
+async def bulk_close_trade_positions(req: BulkCloseRequest):
+    if not req.tickets:
+        raise HTTPException(status_code=400, detail="tickets must not be empty")
+    success, results, message = await asyncio.to_thread(mt5_service.bulk_close_positions, req.tickets)
+    return BulkResultResponse(success=success, results=results, message=message)
+
+
+@app.post("/api/mt5/trade/bulk/modify", response_model=BulkResultResponse)
+async def bulk_modify_trade_positions(req: BulkModifyRequest):
+    if not req.tickets:
+        raise HTTPException(status_code=400, detail="tickets must not be empty")
+    success, results, message = await asyncio.to_thread(mt5_service.bulk_modify_sltp, req.tickets, req.sl, req.tp)
+    return BulkResultResponse(success=success, results=results, message=message)
 
 
 @app.post("/api/mt5/trade/cancel/{ticket}", response_model=TradeResultResponse)

@@ -11,7 +11,8 @@ import {
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useChartStore } from '../store/useChartStore';
-import { PositionItem } from '../types/chart';
+import { PositionItem, BulkTradeResult } from '../types/chart';
+import { BulkSlTpEditor } from './BulkSlTpEditor';
 
 export const BottomTradingDock: React.FC = () => {
   const {
@@ -29,6 +30,15 @@ export const BottomTradingDock: React.FC = () => {
     closePaperTrade,
     cancelPaperTrade,
     breakevenPaperTrade,
+    bulkPaperModify,
+    bulkPaperClose,
+    bulkScope,
+    bulkPairFilter,
+    selectedTickets,
+    setBulkScope,
+    setBulkPairFilter,
+    toggleBulkTicket,
+    setBulkTickets,
     setAccountModalOpen,
     setBacktestModalOpen,
     openAnalyticsHub,
@@ -36,6 +46,10 @@ export const BottomTradingDock: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'positions' | 'orders'>('positions');
   const [busyTicket, setBusyTicket] = useState<number | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkEditorOpen, setBulkEditorOpen] = useState(false);
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; kind: 'live' | 'paper'; symbol: string } | null>(null);
 
   const isPaper = replay.isActive;
   const paperOpen = paperAccount.trades.filter((t) => t.status === 'OPEN');
@@ -96,6 +110,71 @@ export const BottomTradingDock: React.FC = () => {
   const floatingPnl = isPaper
     ? paperAccount.equity - paperAccount.balance
     : account?.profit ?? 0;
+
+  const uniqueSymbols = Array.from(new Set(positions.map((p) => p.symbol))).sort();
+  const bulkTargetTickets = (): number[] => {
+    if (bulkScope === 'pair') return positions.filter((p) => p.symbol === bulkPairFilter).map((p) => p.ticket);
+    if (bulkScope === 'selected')
+      return selectedTickets.filter((t) => positions.some((p) => p.ticket === t));
+    return positions.map((p) => p.ticket);
+  };
+  const bulkCount = bulkTargetTickets().length;
+
+  const toggleAllVisible = () => {
+    const allSelected = positions.every((p) => selectedTickets.includes(p.ticket));
+    setBulkTickets(allSelected ? [] : positions.map((p) => p.ticket));
+  };
+
+  const summarizeBulk = (res: BulkTradeResult): string => {
+    const fails = res.results.filter((r) => !r.success);
+    if (!fails.length) return res.message;
+    const detail = fails
+      .slice(0, 2)
+      .map((f) => `#${f.order_ticket}: ${f.message}`)
+      .join(' | ');
+    return `${res.message} — ${detail}${fails.length > 2 ? ` (+${fails.length - 2} more)` : ''}`;
+  };
+
+  const handleBulkApply = async (sl?: number, tp?: number) => {
+    setBulkBusy(true);
+    try {
+      if (isPaper) {
+        const ids = paperOpen.map((t) => t.id);
+        bulkPaperModify(ids, { sl, tp });
+        showToast('success', `Bulk SL/TP applied to ${ids.length} paper trade(s)`);
+      } else {
+        const res = await api.bulkModifyTrade({ tickets: bulkTargetTickets(), sl, tp });
+        showToast(res.success ? 'success' : 'error', summarizeBulk(res));
+        await refreshTradeState();
+      }
+    } catch (err: any) {
+      showToast('error', err?.message || 'Bulk SL/TP failed');
+    } finally {
+      setBulkBusy(false);
+      setBulkEditorOpen(false);
+    }
+  };
+
+  const scopeLabel =
+    bulkScope === 'all' ? 'All positions' : bulkScope === 'pair' ? bulkPairFilter : 'Selected positions';
+
+  const handleBulkClose = async () => {
+    setBulkBusy(true);
+    setBulkConfirmOpen(false);
+    try {
+      if (isPaper) {
+        bulkPaperClose(paperOpen.map((t) => t.id));
+      } else {
+        const res = await api.bulkClosePosition(bulkTargetTickets());
+        showToast(res.success ? 'success' : 'error', summarizeBulk(res));
+        await refreshTradeState();
+      }
+    } catch (err: any) {
+      showToast('error', err?.message || 'Bulk close failed');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   return (
     <section className="bg-[#1e222d] border-t border-[#2a2e39] flex flex-col shrink-0 z-20">
@@ -247,7 +326,14 @@ export const BottomTradingDock: React.FC = () => {
                     {paperOpen.map((tr) => {
                       const isProfit = tr.pnl_money >= 0;
                       return (
-                        <tr key={tr.id} className="hover:bg-[#1e222d]/80">
+                        <tr
+                          key={tr.id}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'paper', symbol: tr.symbol });
+                          }}
+                          className="hover:bg-[#1e222d]/80"
+                        >
                           <td className="py-1.5 px-3 font-sans font-semibold text-[#d1d4dc]">
                             {tr.symbol}
                           </td>
@@ -362,9 +448,62 @@ export const BottomTradingDock: React.FC = () => {
                 No open positions. Use One-Click Buy/Sell or draw a Long/Short R:R box to place an order.
               </div>
             ) : (
+              <>
+              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[#2a2e39]/60 bg-[#1e222d]/60">
+                <span className="text-[10.5px] font-sans font-semibold uppercase tracking-wide text-[#787b86]">Bulk</span>
+                <div className="flex items-center gap-0.5 rounded bg-[#131722] border border-[#2a2e39] overflow-hidden">
+                  {(['all', 'pair', 'selected'] as const).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => {
+                        setBulkScope(s);
+                        if (s === 'pair' && !bulkPairFilter && uniqueSymbols.length) setBulkPairFilter(uniqueSymbols[0]);
+                      }}
+                      className={`px-2 py-0.5 text-[10.5px] font-sans font-semibold capitalize transition-colors ${
+                        bulkScope === s ? 'bg-[#2962ff]/20 text-[#2962ff]' : 'text-[#787b86] hover:text-[#d1d4dc]'
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+                {bulkScope === 'pair' && (
+                  <select
+                    value={bulkPairFilter}
+                    onChange={(e) => setBulkPairFilter(e.target.value)}
+                    className="bg-[#131722] border border-[#2a2e39] rounded text-[10.5px] font-sans text-[#d1d4dc] px-1.5 py-0.5"
+                  >
+                    {uniqueSymbols.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  onClick={() => setBulkEditorOpen(true)}
+                  disabled={bulkCount === 0 || bulkBusy}
+                  className="px-2 py-0.5 rounded bg-[#2962ff]/15 hover:bg-[#2962ff]/30 text-[#2962ff] text-[10.5px] font-sans font-semibold disabled:opacity-40"
+                >
+                  Set SL/TP ({bulkCount})
+                </button>
+                <button
+                  onClick={() => setBulkConfirmOpen(true)}
+                  disabled={bulkCount === 0 || bulkBusy}
+                  className="px-2 py-0.5 rounded bg-[#089981]/15 hover:bg-[#089981]/30 text-[#089981] text-[10.5px] font-sans font-semibold disabled:opacity-40"
+                >
+                  Close ({bulkCount})
+                </button>
+              </div>
               <table className="w-full text-left border-collapse text-[11.5px]">
                 <thead className="sticky top-0 bg-[#1e222d] text-[#787b86] border-b border-[#2a2e39]">
                   <tr>
+                    <th className="py-1.5 px-2 font-medium">
+                      <input
+                        type="checkbox"
+                        checked={positions.length > 0 && positions.every((p) => selectedTickets.includes(p.ticket))}
+                        onChange={toggleAllVisible}
+                        className="accent-[#2962ff]"
+                      />
+                    </th>
                     <th className="py-1.5 px-3 font-medium">Ticket</th>
                     <th className="py-1.5 px-2 font-medium">Symbol</th>
                     <th className="py-1.5 px-2 font-medium">Side</th>
@@ -387,8 +526,20 @@ export const BottomTradingDock: React.FC = () => {
                         onClick={() => {
                           if (pos.symbol !== symbol) setSymbol(pos.symbol);
                         }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'live', symbol: pos.symbol });
+                        }}
                         className="hover:bg-[#1e222d]/80 cursor-pointer transition-colors"
                       >
+                        <td className="py-1.5 px-2" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedTickets.includes(pos.ticket)}
+                            onChange={() => toggleBulkTicket(pos.ticket)}
+                            className="accent-[#2962ff]"
+                          />
+                        </td>
                         <td className="py-1.5 px-3 text-[#787b86]">#{pos.ticket}</td>
                         <td className="py-1.5 px-2 font-sans font-semibold text-[#d1d4dc]">
                           {pos.symbol}
@@ -457,6 +608,7 @@ export const BottomTradingDock: React.FC = () => {
                   })}
                 </tbody>
               </table>
+              </>
             )
           ) : orders.length === 0 ? (
             <div className="h-full flex items-center justify-center text-[12px] text-[#787b86]">
@@ -539,6 +691,81 @@ export const BottomTradingDock: React.FC = () => {
               </tbody>
             </table>
           )}
+        </div>
+      )}
+
+      {ctxMenu && (
+        <div
+          className="fixed z-50 bg-[#1e222d] border border-[#2a2e39] rounded shadow-xl py-1 min-w-[190px]"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          onMouseLeave={() => setCtxMenu(null)}
+        >
+          <button
+            onClick={() => {
+              if (ctxMenu.kind === 'live') {
+                setBulkScope('pair');
+                setBulkPairFilter(ctxMenu.symbol);
+              }
+              setBulkEditorOpen(true);
+              setCtxMenu(null);
+            }}
+            className="w-full text-left px-3 py-1.5 text-[11.5px] font-sans text-[#d1d4dc] hover:bg-[#2962ff]/15"
+          >
+            Bulk Set SL/TP ({ctxMenu.kind === 'live' ? ctxMenu.symbol : 'all paper'})
+          </button>
+          <button
+            onClick={() => {
+              if (ctxMenu.kind === 'live') {
+                setBulkScope('pair');
+                setBulkPairFilter(ctxMenu.symbol);
+              }
+              setBulkConfirmOpen(true);
+              setCtxMenu(null);
+            }}
+            className="w-full text-left px-3 py-1.5 text-[11.5px] font-sans text-[#f23645] hover:bg-[#f23645]/15"
+          >
+            Bulk Close ({ctxMenu.kind === 'live' ? ctxMenu.symbol : 'all paper'})
+          </button>
+        </div>
+      )}
+
+      {bulkEditorOpen && (
+        <BulkSlTpEditor
+          count={isPaper ? paperOpen.length : bulkCount}
+          onApply={handleBulkApply}
+          onClose={() => setBulkEditorOpen(false)}
+        />
+      )}
+
+      {bulkConfirmOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setBulkConfirmOpen(false)}
+        >
+          <div
+            className="w-[320px] rounded-lg bg-[#1e222d] border border-[#2a2e39] shadow-xl p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-[13px] font-sans font-semibold text-[#d1d4dc] mb-2">Bulk Close</h3>
+            <p className="text-[12px] font-sans text-[#787b86] mb-4">
+              Close {isPaper ? paperOpen.length : bulkCount} position(s)? Scope:{' '}
+              {isPaper ? 'All paper trades' : scopeLabel}
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setBulkConfirmOpen(false)}
+                className="px-3 py-1.5 rounded border border-[#2a2e39] text-[#d1d4dc] text-[12px] font-sans font-semibold hover:bg-[#2a2e39]/40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkClose}
+                className="px-3 py-1.5 rounded bg-[#f23645] hover:bg-[#f23645]/80 text-white text-[12px] font-sans font-semibold"
+              >
+                Close {isPaper ? paperOpen.length : bulkCount}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </section>
