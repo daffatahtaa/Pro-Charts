@@ -50,6 +50,7 @@ export const BottomTradingDock: React.FC = () => {
     setAccountModalOpen,
     setBacktestModalOpen,
     openAnalyticsHub,
+    chartSettings,
   } = useChartStore();
 
   const [activeTab, setActiveTab] = useState<'positions' | 'orders'>('positions');
@@ -791,7 +792,10 @@ export const BottomTradingDock: React.FC = () => {
       {ctxMenu && (
         <div
           className="fixed z-50 bg-[#1e222d] border border-[#2a2e39] rounded shadow-xl py-1 min-w-[190px]"
-          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          style={{
+            left: ctxMenu.x / (chartSettings.uiScale || 1),
+            top: ctxMenu.y / (chartSettings.uiScale || 1),
+          }}
           onMouseLeave={() => setCtxMenu(null)}
         >
           <button

@@ -125,6 +125,9 @@ export type LayoutMode = '1' | '2v' | '2h' | '4';
 
 export type MagnetMode = 'normal' | 'weak_magnet' | 'strong_magnet';
 
+export type TradeLineStyle = 'solid' | 'dashed' | 'dotted';
+export type UiScalePreset = 0.8 | 0.9 | 1.0 | 1.1 | 1.25;
+
 export interface ChartThemeSettings {
   bullBodyColor: string;
   bearBodyColor: string;
@@ -152,6 +155,17 @@ export interface ChartThemeSettings {
   bidLineColor: string;
   askLineColor: string;
   showPositionLines: boolean;
+  positionLineStyle: TradeLineStyle;
+  positionLineWidth: number;
+  positionLineOpacity: number;
+  positionColorMode: 'pnl' | 'custom';
+  positionProfitColor: string;
+  positionLossColor: string;
+  positionCustomColor: string;
+  pendingOrderLineColor: string;
+  slLineColor: string;
+  tpLineColor: string;
+  uiScale: number;
   showOhlcValues: boolean;
   showBarChange: boolean;
   showVolumeValue: boolean;
@@ -185,6 +199,17 @@ export const DEFAULT_CHART_SETTINGS: ChartThemeSettings = {
   bidLineColor: '#2962ff',
   askLineColor: '#f23645',
   showPositionLines: true,
+  positionLineStyle: 'solid',
+  positionLineWidth: 1,
+  positionLineOpacity: 1.0,
+  positionColorMode: 'pnl',
+  positionProfitColor: '#089981',
+  positionLossColor: '#f23645',
+  positionCustomColor: '#2962ff',
+  pendingOrderLineColor: '#2962ff',
+  slLineColor: '#f23645',
+  tpLineColor: '#089981',
+  uiScale: 1.0,
   showOhlcValues: true,
   showBarChange: true,
   showVolumeValue: true,

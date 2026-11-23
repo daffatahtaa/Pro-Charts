@@ -14,6 +14,11 @@
   --tv-muted: #787b86;
   --tv-bull: #089981;
   --tv-bear: #f23645;
+  --ui-scale: 1;
+}
+
+.ui-scaled {
+  zoom: var(--ui-scale, 1);
 }
 
 * {

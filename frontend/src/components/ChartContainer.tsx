@@ -1290,13 +1290,21 @@ export const ChartContainer: React.FC = () => {
       },
       xAxis: {
         axisLine: { show: true, color: '#2a2e39', size: 1 },
-        tickText: { color: '#787b86', size: 11, family: 'Trebuchet MS, sans-serif' },
+        tickText: {
+          color: '#787b86',
+          size: Math.round(11 * (chartSettings.uiScale || 1)),
+          family: 'Trebuchet MS, sans-serif',
+        },
         tickLine: { show: true, size: 1, length: 3, color: '#2a2e39' },
       },
       yAxis: {
         type: (logScale ? 'log' : 'normal') as any,
         axisLine: { show: true, color: '#2a2e39', size: 1 },
-        tickText: { color: '#787b86', size: 11, family: 'JetBrains Mono, monospace' },
+        tickText: {
+          color: '#787b86',
+          size: Math.round(11 * (chartSettings.uiScale || 1)),
+          family: 'JetBrains Mono, monospace',
+        },
         tickLine: { show: true, size: 1, length: 3, color: '#2a2e39' },
       },
       crosshair: {
@@ -1313,7 +1321,7 @@ export const ChartContainer: React.FC = () => {
           text: {
             show: true,
             color: '#ffffff',
-            size: 11,
+            size: Math.round(11 * (chartSettings.uiScale || 1)),
             backgroundColor: '#2962ff',
             borderColor: '#2962ff',
           },
@@ -1330,7 +1338,7 @@ export const ChartContainer: React.FC = () => {
           text: {
             show: true,
             color: '#ffffff',
-            size: 11,
+            size: Math.round(11 * (chartSettings.uiScale || 1)),
             backgroundColor: '#2962ff',
             borderColor: '#2962ff',
           },

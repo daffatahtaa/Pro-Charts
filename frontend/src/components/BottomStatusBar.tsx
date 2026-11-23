@@ -19,6 +19,8 @@ export const BottomStatusBar: React.FC = () => {
     autoScale,
     timezone,
     setTimezone,
+    chartSettings,
+    setChartSettingsModalOpen,
     bridge,
   } = useChartStore();
 
@@ -171,6 +173,16 @@ export const BottomStatusBar: React.FC = () => {
         </div>
 
         <div className="w-[1px] h-3.5 bg-[#2a2e39]" />
+
+        {Math.abs((chartSettings.uiScale || 1) - 1) > 0.01 && (
+          <button
+            onClick={() => setChartSettingsModalOpen(true)}
+            title="Active UI Scale (click to adjust in Chart Settings)"
+            className="px-1.5 h-[22px] rounded font-mono-num text-[10.5px] text-[#2962ff] bg-[#2962ff]/15 hover:bg-[#2962ff]/25 transition-colors"
+          >
+            {Math.round((chartSettings.uiScale || 1) * 100)}%
+          </button>
+        )}
 
         <button
           onClick={toggleLogScale}

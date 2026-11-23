@@ -148,11 +148,15 @@ export const SecondaryChartPane: React.FC<SecondaryChartPaneProps> = ({ paneId }
       },
       xAxis: {
         axisLine: { show: true, color: '#2a2e39', size: 1 },
-        tickText: { color: '#787b86', size: 10 },
+        tickText: { color: '#787b86', size: Math.round(10 * (chartSettings.uiScale || 1)) },
       },
       yAxis: {
         axisLine: { show: true, color: '#2a2e39', size: 1 },
-        tickText: { color: '#787b86', size: 10, family: 'JetBrains Mono, monospace' },
+        tickText: {
+          color: '#787b86',
+          size: Math.round(10 * (chartSettings.uiScale || 1)),
+          family: 'JetBrains Mono, monospace',
+        },
       },
       crosshair: {
         show: true,

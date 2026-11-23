@@ -670,11 +670,33 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
 
         if (entryY === null || entryY < 8 || entryY > paneHeight - 26) return null;
 
+        const posOpacity = Math.max(
+          0.1,
+          Math.min(1, chartSettings.positionLineOpacity ?? 1)
+        );
+        const posLineStyle = chartSettings.positionLineStyle || 'solid';
+        const posLineWidth = Math.max(1, Math.min(3, chartSettings.positionLineWidth || 1));
+        const slColor = chartSettings.slLineColor || '#f23645';
+        const tpColor = chartSettings.tpLineColor || '#089981';
+
+        const toRgba = (hex: string, alpha: number) => {
+          const clean = (hex || '').replace('#', '');
+          if (clean.length === 6) {
+            const r = parseInt(clean.slice(0, 2), 16);
+            const g = parseInt(clean.slice(2, 4), 16);
+            const b = parseInt(clean.slice(4, 6), 16);
+            return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`;
+          }
+          return hex;
+        };
+
         const entryColor = tr.isPending
-          ? '#2962ff'
+          ? chartSettings.pendingOrderLineColor || '#2962ff'
+          : chartSettings.positionColorMode === 'custom'
+          ? chartSettings.positionCustomColor || '#2962ff'
           : tr.profit >= 0
-          ? '#089981'
-          : '#f23645';
+          ? chartSettings.positionProfitColor || '#089981'
+          : chartSettings.positionLossColor || '#f23645';
 
         const slDist = effSl > 0 ? Math.abs(effEntry - effSl) : 0;
         const tpDist = effTp > 0 ? Math.abs(effTp - effEntry) : 0;
@@ -692,11 +714,13 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
             {/* Visual TP Profit Zone (ONLY when selected!) */}
             {isSelected && tpY !== null && (
               <div
-                className="absolute left-0 pointer-events-none bg-[#089981]/15 border-y border-[#089981]/70"
+                className="absolute left-0 pointer-events-none border-y"
                 style={{
                   right: `${yAxisWidth}px`,
                   top: `${Math.min(entryY, tpY)}px`,
                   height: `${Math.max(2, Math.abs(tpY - entryY))}px`,
+                  backgroundColor: toRgba(tpColor, 0.15 * posOpacity),
+                  borderColor: toRgba(tpColor, 0.7 * posOpacity),
                 }}
               />
             )}
@@ -704,11 +728,13 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
             {/* Visual SL Loss Zone (ONLY when selected!) */}
             {isSelected && slY !== null && (
               <div
-                className="absolute left-0 pointer-events-none bg-[#f23645]/15 border-y border-[#f23645]/70"
+                className="absolute left-0 pointer-events-none border-y"
                 style={{
                   right: `${yAxisWidth}px`,
                   top: `${Math.min(entryY, slY)}px`,
                   height: `${Math.max(2, Math.abs(slY - entryY))}px`,
+                  backgroundColor: toRgba(slColor, 0.15 * posOpacity),
+                  borderColor: toRgba(slColor, 0.7 * posOpacity),
                 }}
               />
             )}
@@ -724,8 +750,17 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
                 style={{ top: `${tpY}px`, right: `${yAxisWidth}px` }}
                 title="Drag vertically to move Take Profit"
               >
-                <div className="w-full border-t border-dashed border-[#089981] group-hover:border-solid" />
-                <div className="absolute right-7 flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-[#089981] text-white font-mono-num text-[10.5px] font-bold shadow-tv whitespace-nowrap select-none">
+                <div
+                  className="w-full"
+                  style={{
+                    borderTop: `${posLineWidth}px ${posLineStyle === 'dotted' ? 'dotted' : 'dashed'} ${tpColor}`,
+                    opacity: posOpacity,
+                  }}
+                />
+                <div
+                  className="absolute right-7 flex items-center gap-1.5 px-2.5 py-0.5 rounded text-white font-mono-num text-[10.5px] font-bold shadow-tv whitespace-nowrap select-none"
+                  style={{ backgroundColor: tpColor }}
+                >
                   <ArrowUpDown className="w-3 h-3 opacity-85 shrink-0" />
                   <span>
                     TP: {formatTradePrice(effTp, digits)} (+{tpPips}p | ~+${estProfit}
@@ -746,8 +781,17 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
                 style={{ top: `${slY}px`, right: `${yAxisWidth}px` }}
                 title="Drag vertically to move Stop Loss"
               >
-                <div className="w-full border-t border-dashed border-[#f23645] group-hover:border-solid" />
-                <div className="absolute right-7 flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-[#f23645] text-white font-mono-num text-[10.5px] font-bold shadow-tv whitespace-nowrap select-none">
+                <div
+                  className="w-full"
+                  style={{
+                    borderTop: `${posLineWidth}px ${posLineStyle === 'dotted' ? 'dotted' : 'dashed'} ${slColor}`,
+                    opacity: posOpacity,
+                  }}
+                />
+                <div
+                  className="absolute right-7 flex items-center gap-1.5 px-2.5 py-0.5 rounded text-white font-mono-num text-[10.5px] font-bold shadow-tv whitespace-nowrap select-none"
+                  style={{ backgroundColor: slColor }}
+                >
                   <ArrowUpDown className="w-3 h-3 opacity-85 shrink-0" />
                   <span>
                     SL: {formatTradePrice(effSl, digits)} (-{slPips}p | ~-${estLoss})
@@ -764,7 +808,8 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
               <div
                 className="w-full"
                 style={{
-                  borderTop: `${tr.isPending ? '1px dashed' : '1px solid'} ${entryColor}`,
+                  borderTop: `${posLineWidth}px ${tr.isPending ? 'dashed' : posLineStyle} ${entryColor}`,
+                  opacity: posOpacity,
                 }}
               />
               <div

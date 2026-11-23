@@ -50,10 +50,24 @@ export function App() {
     isChartFullscreen,
     toggleChartFullscreen,
     setChartFullscreen,
+    chartSettings,
   } = useChartStore();
 
   const [fsSnapshotOpen, setFsSnapshotOpen] = useState(false);
   const fsSnapshotRef = useRef<HTMLDivElement>(null);
+
+  // Sync CSS --ui-scale custom property for non-canvas UI chrome (keeping KLineCharts canvas 1:1)
+  useEffect(() => {
+    const scale =
+      typeof chartSettings.uiScale === 'number' && Number.isFinite(chartSettings.uiScale)
+        ? Math.max(0.75, Math.min(1.4, chartSettings.uiScale))
+        : 1.0;
+    document.documentElement.style.setProperty('--ui-scale', String(scale));
+    const t = window.setTimeout(() => {
+      window.dispatchEvent(new Event('resize'));
+    }, 40);
+    return () => window.clearTimeout(t);
+  }, [chartSettings.uiScale]);
 
   // Sync chart fullscreen state with native browser Fullscreen API
   useEffect(() => {
@@ -195,25 +209,49 @@ export function App() {
   return (
     <div className="w-screen h-screen flex flex-col bg-[#131722] text-[#d1d4dc] overflow-hidden relative">
       {/* TradingView Desktop Workspace Tabs Bar (34px) */}
-      {!isChartFullscreen && <WorkspaceTabsBar />}
+      {!isChartFullscreen && (
+        <div className="ui-scaled shrink-0">
+          <WorkspaceTabsBar />
+        </div>
+      )}
 
       {/* Top Toolbar (38px) */}
-      {!isChartFullscreen && <TopToolbar />}
+      {!isChartFullscreen && (
+        <div className="ui-scaled shrink-0">
+          <TopToolbar />
+        </div>
+      )}
 
       {/* Main Workspace Area */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Left Drawing Sidebar (44px) */}
-        {!isChartFullscreen && <LeftDrawingBar />}
+        {!isChartFullscreen && (
+          <div className="ui-scaled flex shrink-0">
+            <LeftDrawingBar />
+          </div>
+        )}
 
-        {/* Center Column: Multi-Chart Grid + Bottom Trading Dock + Bottom Status Bar */}
+        {/* Center Column: Multi-Chart Grid (always zoom: 1 for 1:1 canvas pointer accuracy) + Scaled Bottom Bars */}
         <main className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
           <MultiChartGrid />
-          {!isChartFullscreen && <BottomTradingDock />}
-          {!isChartFullscreen && <BottomStatusBar />}
+          {!isChartFullscreen && (
+            <div className="ui-scaled shrink-0">
+              <BottomTradingDock />
+            </div>
+          )}
+          {!isChartFullscreen && (
+            <div className="ui-scaled shrink-0">
+              <BottomStatusBar />
+            </div>
+          )}
         </main>
 
         {/* Right Sidebar (Watchlist / Object Tree / Alerts) */}
-        {!isChartFullscreen && <RightWatchlist />}
+        {!isChartFullscreen && (
+          <div className="ui-scaled flex shrink-0">
+            <RightWatchlist />
+          </div>
+        )}
       </div>
 
       {/* Floating Hover Pill in Fullscreen Mode (Snapshot + Exit Fullscreen) */}
@@ -257,15 +295,17 @@ export function App() {
       {/* Draggable Floating Favorites Toolbar */}
       {!isChartFullscreen && <FloatingFavoritesBar />}
 
-      {/* Modals */}
-      <SymbolSearchModal />
-      <IndicatorsModal />
-      <ChartSettingsModal />
-      <AccountLoginModal />
-      <BacktestReportModal />
-      <TradingAnalyticsModal />
-      <QuickIntervalModal />
-      <DrawingSettingsModal />
+      {/* Modals (scaled consistently with UI scale) */}
+      <div className="ui-scaled">
+        <SymbolSearchModal />
+        <IndicatorsModal />
+        <ChartSettingsModal />
+        <AccountLoginModal />
+        <BacktestReportModal />
+        <TradingAnalyticsModal />
+        <QuickIntervalModal />
+        <DrawingSettingsModal />
+      </div>
 
       {/* Persistent TradingView-style Alert Triggered Popup (stays until user clicks OK / Re-arm) */}
       {triggeredAlertNotice && (
