@@ -36,6 +36,10 @@ export const BottomTradingDock: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'positions' | 'orders'>('positions');
   const [busyTicket, setBusyTicket] = useState<number | null>(null);
+  const [selectedTickets, setSelectedTickets] = useState<Set<number>>(new Set());
+  const [scope, setScope] = useState<'all' | 'pair' | 'selected'>('all');
+  const [pairFilter, setPairFilter] = useState<string>('');
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const isPaper = replay.isActive;
   const paperOpen = paperAccount.trades.filter((t) => t.status === 'OPEN');
@@ -96,6 +100,32 @@ export const BottomTradingDock: React.FC = () => {
   const floatingPnl = isPaper
     ? paperAccount.equity - paperAccount.balance
     : account?.profit ?? 0;
+
+  const uniqueSymbols = Array.from(new Set(positions.map((p) => p.symbol))).sort();
+  const bulkTargetTickets = (): number[] => {
+    if (scope === 'pair') return positions.filter((p) => p.symbol === pairFilter).map((p) => p.ticket);
+    if (scope === 'selected') return [...selectedTickets];
+    return positions.map((p) => p.ticket);
+  };
+  const bulkCount = bulkTargetTickets().length;
+
+  const toggleTicket = (ticket: number) => {
+    setSelectedTickets((prev) => {
+      const next = new Set(prev);
+      if (next.has(ticket)) next.delete(ticket);
+      else next.add(ticket);
+      return next;
+    });
+  };
+
+  const toggleAllVisible = () => {
+    setSelectedTickets((prev) => {
+      const next = new Set(prev);
+      const allSelected = positions.every((p) => next.has(p.ticket));
+      positions.forEach((p) => (allSelected ? next.delete(p.ticket) : next.add(p.ticket)));
+      return next;
+    });
+  };
 
   return (
     <section className="bg-[#1e222d] border-t border-[#2a2e39] flex flex-col shrink-0 z-20">
@@ -362,9 +392,62 @@ export const BottomTradingDock: React.FC = () => {
                 No open positions. Use One-Click Buy/Sell or draw a Long/Short R:R box to place an order.
               </div>
             ) : (
+              <>
+              <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[#2a2e39]/60 bg-[#1e222d]/60">
+                <span className="text-[10.5px] font-sans font-semibold uppercase tracking-wide text-[#787b86]">Bulk</span>
+                <div className="flex items-center gap-0.5 rounded bg-[#131722] border border-[#2a2e39] overflow-hidden">
+                  {(['all', 'pair', 'selected'] as const).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => {
+                        setScope(s);
+                        if (s === 'pair' && !pairFilter && uniqueSymbols.length) setPairFilter(uniqueSymbols[0]);
+                      }}
+                      className={`px-2 py-0.5 text-[10.5px] font-sans font-semibold capitalize transition-colors ${
+                        scope === s ? 'bg-[#2962ff]/20 text-[#2962ff]' : 'text-[#787b86] hover:text-[#d1d4dc]'
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+                {scope === 'pair' && (
+                  <select
+                    value={pairFilter}
+                    onChange={(e) => setPairFilter(e.target.value)}
+                    className="bg-[#131722] border border-[#2a2e39] rounded text-[10.5px] font-sans text-[#d1d4dc] px-1.5 py-0.5"
+                  >
+                    {uniqueSymbols.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  onClick={() => showToast('info', 'Bulk SL/TP editor lands in the next commit')}
+                  disabled={bulkCount === 0 || bulkBusy}
+                  className="px-2 py-0.5 rounded bg-[#2962ff]/15 hover:bg-[#2962ff]/30 text-[#2962ff] text-[10.5px] font-sans font-semibold disabled:opacity-40"
+                >
+                  Set SL/TP ({bulkCount})
+                </button>
+                <button
+                  onClick={() => showToast('info', 'Bulk close lands in the next commit')}
+                  disabled={bulkCount === 0 || bulkBusy}
+                  className="px-2 py-0.5 rounded bg-[#089981]/15 hover:bg-[#089981]/30 text-[#089981] text-[10.5px] font-sans font-semibold disabled:opacity-40"
+                >
+                  Close ({bulkCount})
+                </button>
+              </div>
               <table className="w-full text-left border-collapse text-[11.5px]">
                 <thead className="sticky top-0 bg-[#1e222d] text-[#787b86] border-b border-[#2a2e39]">
                   <tr>
+                    <th className="py-1.5 px-2 font-medium">
+                      <input
+                        type="checkbox"
+                        checked={positions.length > 0 && positions.every((p) => selectedTickets.has(p.ticket))}
+                        onChange={toggleAllVisible}
+                        className="accent-[#2962ff]"
+                      />
+                    </th>
                     <th className="py-1.5 px-3 font-medium">Ticket</th>
                     <th className="py-1.5 px-2 font-medium">Symbol</th>
                     <th className="py-1.5 px-2 font-medium">Side</th>
@@ -389,6 +472,14 @@ export const BottomTradingDock: React.FC = () => {
                         }}
                         className="hover:bg-[#1e222d]/80 cursor-pointer transition-colors"
                       >
+                        <td className="py-1.5 px-2" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedTickets.has(pos.ticket)}
+                            onChange={() => toggleTicket(pos.ticket)}
+                            className="accent-[#2962ff]"
+                          />
+                        </td>
                         <td className="py-1.5 px-3 text-[#787b86]">#{pos.ticket}</td>
                         <td className="py-1.5 px-2 font-sans font-semibold text-[#d1d4dc]">
                           {pos.symbol}
@@ -457,6 +548,7 @@ export const BottomTradingDock: React.FC = () => {
                   })}
                 </tbody>
               </table>
+              </>
             )
           ) : orders.length === 0 ? (
             <div className="h-full flex items-center justify-center text-[12px] text-[#787b86]">
