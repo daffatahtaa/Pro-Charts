@@ -156,6 +156,8 @@ cd Pro-Charts
 start-dev.bat
 ```
 
+> First run: the launcher auto-installs backend (venv + pip) and frontend (npm) dependencies.
+
 ### Option 2 — Manual Setup (Windows / macOS / Linux)
 
 **1. Clone the repository**
