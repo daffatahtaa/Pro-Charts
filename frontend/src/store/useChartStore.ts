@@ -607,7 +607,13 @@ export const useChartStore = create<ChartStore>((set, get) => ({
   indicatorsModalOpen: false,
   logScale: false,
   autoScale: true,
-  timezone: localStorage.getItem(LS_TZ_KEY) || 'Asia/Jakarta',
+  timezone: (() => {
+    try {
+      return localStorage.getItem(LS_TZ_KEY) || 'Asia/Jakarta';
+    } catch {
+      return 'Asia/Jakarta';
+    }
+  })(),
 
   alerts: [],
   triggeredAlertNotice: null,

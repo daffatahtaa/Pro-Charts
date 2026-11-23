@@ -220,6 +220,11 @@ function resolveArrIndex(arr: any[], idx: number): number {
 }
 
 export const PINE_ARRAY_OBJECT: Record<string, any> = {
+  new: (size = 0, initialVal: any = null): any[] => {
+    const arr = new Array(Math.max(0, Math.trunc(size))).fill(initialVal);
+    (arr as any).__isPineArray = true;
+    return arr;
+  },
   new_any: (size = 0, initialVal: any = null): any[] => {
     const arr = new Array(Math.max(0, Math.trunc(size))).fill(initialVal);
     (arr as any).__isPineArray = true;
@@ -265,12 +270,36 @@ export const PINE_ARRAY_OBJECT: Record<string, any> = {
     (arr as any).__isPineArray = true;
     return arr;
   },
+  new_table: (size = 0, initialVal: any = null): any[] => {
+    const arr = new Array(Math.max(0, Math.trunc(size))).fill(initialVal);
+    (arr as any).__isPineArray = true;
+    return arr;
+  },
+  new_linefill: (size = 0, initialVal: any = null): any[] => {
+    const arr = new Array(Math.max(0, Math.trunc(size))).fill(initialVal);
+    (arr as any).__isPineArray = true;
+    return arr;
+  },
+  new_polyline: (size = 0, initialVal: any = null): any[] => {
+    const arr = new Array(Math.max(0, Math.trunc(size))).fill(initialVal);
+    (arr as any).__isPineArray = true;
+    return arr;
+  },
   fill: (arr: any[], val: any, indexFrom = 0, indexTo?: number) => {
     if (!Array.isArray(arr)) return;
     const end = indexTo !== undefined ? Math.min(arr.length, indexTo) : arr.length;
     for (let i = Math.max(0, indexFrom); i < end; i++) arr[i] = val;
   },
-  from: (...items: any[]) => [...items],
+  from: (...items: any[]) => {
+    const arr = [...items];
+    (arr as any).__isPineArray = true;
+    return arr;
+  },
+  copy: (arr: any[]) => {
+    const out = Array.isArray(arr) ? [...arr] : [];
+    (out as any).__isPineArray = true;
+    return out;
+  },
   push: (arr: any[], val: any) => {
     if (Array.isArray(arr)) arr.push(val);
     return arr?.length ?? 0;
@@ -280,6 +309,17 @@ export const PINE_ARRAY_OBJECT: Record<string, any> = {
   unshift: (arr: any[], val: any) => {
     if (Array.isArray(arr)) arr.unshift(val);
     return arr?.length ?? 0;
+  },
+  insert: (arr: any[], idx: number, val: any) => {
+    if (!Array.isArray(arr)) return;
+    const ri = idx < 0 ? Math.max(0, arr.length + Math.trunc(idx)) : Math.min(arr.length, Math.trunc(idx));
+    arr.splice(ri, 0, val);
+  },
+  remove: (arr: any[], idx: number) => {
+    if (!Array.isArray(arr) || arr.length === 0) return NaN;
+    const ri = resolveArrIndex(arr, idx);
+    if (ri >= 0 && ri < arr.length) return arr.splice(ri, 1)[0];
+    return NaN;
   },
   get: (arr: any[], idx: number) => {
     if (!Array.isArray(arr) || arr.length === 0) return NaN;
@@ -298,6 +338,28 @@ export const PINE_ARRAY_OBJECT: Record<string, any> = {
   clear: (arr: any[]) => {
     if (Array.isArray(arr)) arr.length = 0;
   },
+  reverse: (arr: any[]) => {
+    if (Array.isArray(arr)) arr.reverse();
+    return arr;
+  },
+  slice: (arr: any[], fromIdx: number, toIdx?: number) => {
+    const out = Array.isArray(arr) ? arr.slice(fromIdx, toIdx) : [];
+    (out as any).__isPineArray = true;
+    return out;
+  },
+  concat: (arr1: any[], arr2: any[]) => {
+    if (Array.isArray(arr1) && Array.isArray(arr2)) arr1.push(...arr2);
+    return arr1;
+  },
+  sort: (arr: any[], order?: string) => {
+    if (!Array.isArray(arr)) return arr;
+    const desc = String(order || '').toLowerCase().includes('desc');
+    arr.sort((a, b) => (desc ? Number(b) - Number(a) : Number(a) - Number(b)));
+    return arr;
+  },
+  indexof: (arr: any[], val: any) => (Array.isArray(arr) ? arr.indexOf(val) : -1),
+  lastindexof: (arr: any[], val: any) => (Array.isArray(arr) ? arr.lastIndexOf(val) : -1),
+  join: (arr: any[], sep = '') => (Array.isArray(arr) ? arr.join(String(sep)) : ''),
   sum: (arr: number[]) => {
     if (!Array.isArray(arr) || arr.length === 0) return 0;
     let s = 0;
@@ -328,7 +390,260 @@ export const PINE_ARRAY_OBJECT: Record<string, any> = {
     for (const v of arr) if (Number.isFinite(v) && v < m) m = v;
     return Number.isFinite(m) ? m : NaN;
   },
+  median: (arr: number[]) => {
+    if (!Array.isArray(arr) || arr.length === 0) return NaN;
+    const vals = arr.filter(Number.isFinite).sort((a, b) => a - b);
+    if (vals.length === 0) return NaN;
+    const mid = Math.floor(vals.length / 2);
+    return vals.length % 2 === 0 ? (vals[mid - 1] + vals[mid]) / 2 : vals[mid];
+  },
+  variance: (arr: number[]) => {
+    if (!Array.isArray(arr) || arr.length === 0) return NaN;
+    const vals = arr.filter(Number.isFinite);
+    if (vals.length === 0) return NaN;
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+    return vals.reduce((acc, v) => acc + (v - mean) * (v - mean), 0) / vals.length;
+  },
+  stdev: (arr: number[]) => {
+    const v = PINE_ARRAY_OBJECT.variance(arr);
+    return Number.isFinite(v) ? Math.sqrt(v) : NaN;
+  },
   includes: (arr: any[], val: any) => (Array.isArray(arr) ? arr.includes(val) : false),
+};
+
+// ============================================================================
+// Pine v6 map.* Helpers
+// ============================================================================
+export interface PineMapInstance {
+  __isPineMap: true;
+  __pineType: 'map';
+  __data: Map<any, any>;
+}
+
+function createPineMap(entries?: Iterable<[any, any]>): PineMapInstance {
+  return {
+    __isPineMap: true,
+    __pineType: 'map',
+    __data: new Map<any, any>(entries),
+  };
+}
+
+export const PINE_MAP_OBJECT: Record<string, any> = {
+  new: (): PineMapInstance => createPineMap(),
+  new_any: (): PineMapInstance => createPineMap(),
+  put: (m: PineMapInstance, key: any, val: any) => {
+    if (!m?.__data) return NaN;
+    const prev = m.__data.has(key) ? m.__data.get(key) : NaN;
+    m.__data.set(key, val);
+    return prev;
+  },
+  get: (m: PineMapInstance, key: any) => {
+    if (!m?.__data || !m.__data.has(key)) return NaN;
+    return m.__data.get(key);
+  },
+  contains: (m: PineMapInstance, key: any) => Boolean(m?.__data?.has(key)),
+  remove: (m: PineMapInstance, key: any) => {
+    if (!m?.__data || !m.__data.has(key)) return NaN;
+    const prev = m.__data.get(key);
+    m.__data.delete(key);
+    return prev;
+  },
+  keys: (m: PineMapInstance) => {
+    const out = m?.__data ? Array.from(m.__data.keys()) : [];
+    (out as any).__isPineArray = true;
+    return out;
+  },
+  values: (m: PineMapInstance) => {
+    const out = m?.__data ? Array.from(m.__data.values()) : [];
+    (out as any).__isPineArray = true;
+    return out;
+  },
+  size: (m: PineMapInstance) => (m?.__data ? m.__data.size : 0),
+  clear: (m: PineMapInstance) => {
+    m?.__data?.clear();
+  },
+  copy: (m: PineMapInstance) => createPineMap(m?.__data ? m.__data.entries() : undefined),
+  put_all: (m: PineMapInstance, other: PineMapInstance) => {
+    if (!m?.__data || !other?.__data) return;
+    for (const [k, v] of other.__data.entries()) {
+      m.__data.set(k, v);
+    }
+  },
+};
+
+// ============================================================================
+// Pine v6 matrix.* Helpers
+// ============================================================================
+export interface PineMatrixInstance {
+  __isPineMatrix: true;
+  __pineType: 'matrix';
+  __rows: any[][];
+}
+
+function createPineMatrix(rows = 0, cols = 0, initialVal: any = NaN): PineMatrixInstance {
+  const r = Math.max(0, Math.trunc(Number(rows) || 0));
+  const c = Math.max(0, Math.trunc(Number(cols) || 0));
+  const data: any[][] = [];
+  for (let i = 0; i < r; i++) {
+    data.push(new Array(c).fill(initialVal));
+  }
+  return { __isPineMatrix: true, __pineType: 'matrix', __rows: data };
+}
+
+function resolveMatIdx(len: number, idx: number): number {
+  const i = Math.trunc(Number(idx));
+  return i < 0 ? len + i : i;
+}
+
+export const PINE_MATRIX_OBJECT: Record<string, any> = {
+  new: (rows = 0, cols = 0, initialVal: any = NaN): PineMatrixInstance =>
+    createPineMatrix(rows, cols, initialVal),
+  new_any: (rows = 0, cols = 0, initialVal: any = NaN): PineMatrixInstance =>
+    createPineMatrix(rows, cols, initialVal),
+  rows: (m: PineMatrixInstance) => (m?.__rows ? m.__rows.length : 0),
+  columns: (m: PineMatrixInstance) => (m?.__rows && m.__rows.length > 0 ? m.__rows[0].length : 0),
+  elements_count: (m: PineMatrixInstance) =>
+    PINE_MATRIX_OBJECT.rows(m) * PINE_MATRIX_OBJECT.columns(m),
+  get: (m: PineMatrixInstance, row: number, col: number) => {
+    if (!m?.__rows || m.__rows.length === 0) return NaN;
+    const r = resolveMatIdx(m.__rows.length, row);
+    if (r < 0 || r >= m.__rows.length) return NaN;
+    const c = resolveMatIdx(m.__rows[r].length, col);
+    return c >= 0 && c < m.__rows[r].length ? m.__rows[r][c] : NaN;
+  },
+  set: (m: PineMatrixInstance, row: number, col: number, val: any) => {
+    if (!m?.__rows || m.__rows.length === 0) return val;
+    const r = resolveMatIdx(m.__rows.length, row);
+    if (r < 0 || r >= m.__rows.length) return val;
+    const c = resolveMatIdx(m.__rows[r].length, col);
+    if (c >= 0 && c < m.__rows[r].length) m.__rows[r][c] = val;
+    return val;
+  },
+  row: (m: PineMatrixInstance, row: number) => {
+    if (!m?.__rows || m.__rows.length === 0) return PINE_ARRAY_OBJECT.new_any(0);
+    const r = resolveMatIdx(m.__rows.length, row);
+    const out = r >= 0 && r < m.__rows.length ? [...m.__rows[r]] : [];
+    (out as any).__isPineArray = true;
+    return out;
+  },
+  col: (m: PineMatrixInstance, col: number) => {
+    if (!m?.__rows || m.__rows.length === 0) return PINE_ARRAY_OBJECT.new_any(0);
+    const cols = m.__rows[0].length;
+    const c = resolveMatIdx(cols, col);
+    const out = c >= 0 && c < cols ? m.__rows.map((r) => r[c]) : [];
+    (out as any).__isPineArray = true;
+    return out;
+  },
+  add_row: (m: PineMatrixInstance, rowIdx?: number, arrOrVal?: any) => {
+    if (!m?.__rows) return;
+    const cols = m.__rows.length > 0 ? m.__rows[0].length : Array.isArray(arrOrVal) ? arrOrVal.length : 0;
+    const newRow = Array.isArray(arrOrVal)
+      ? Array.from({ length: cols || arrOrVal.length }, (_, i) => arrOrVal[i] ?? NaN)
+      : new Array(cols).fill(arrOrVal !== undefined ? arrOrVal : NaN);
+    if (rowIdx === undefined || rowIdx >= m.__rows.length) {
+      m.__rows.push(newRow);
+    } else {
+      const r = Math.max(0, resolveMatIdx(m.__rows.length, rowIdx));
+      m.__rows.splice(r, 0, newRow);
+    }
+  },
+  add_col: (m: PineMatrixInstance, colIdx?: number, arrOrVal?: any) => {
+    if (!m?.__rows) return;
+    if (m.__rows.length === 0 && Array.isArray(arrOrVal)) {
+      for (const v of arrOrVal) m.__rows.push([v]);
+      return;
+    }
+    const cols = m.__rows.length > 0 ? m.__rows[0].length : 0;
+    const pos =
+      colIdx === undefined || colIdx >= cols ? cols : Math.max(0, resolveMatIdx(cols, colIdx));
+    m.__rows.forEach((row, rIdx) => {
+      const val = Array.isArray(arrOrVal) ? arrOrVal[rIdx] ?? NaN : arrOrVal !== undefined ? arrOrVal : NaN;
+      row.splice(pos, 0, val);
+    });
+  },
+  remove_row: (m: PineMatrixInstance, rowIdx?: number) => {
+    if (!m?.__rows || m.__rows.length === 0) return PINE_ARRAY_OBJECT.new_any(0);
+    const r = rowIdx === undefined ? m.__rows.length - 1 : resolveMatIdx(m.__rows.length, rowIdx);
+    const removed = r >= 0 && r < m.__rows.length ? m.__rows.splice(r, 1)[0] : [];
+    (removed as any).__isPineArray = true;
+    return removed;
+  },
+  remove_col: (m: PineMatrixInstance, colIdx?: number) => {
+    if (!m?.__rows || m.__rows.length === 0 || m.__rows[0].length === 0) {
+      return PINE_ARRAY_OBJECT.new_any(0);
+    }
+    const cols = m.__rows[0].length;
+    const c = colIdx === undefined ? cols - 1 : resolveMatIdx(cols, colIdx);
+    const removed = c >= 0 && c < cols ? m.__rows.map((r) => r.splice(c, 1)[0]) : [];
+    (removed as any).__isPineArray = true;
+    return removed;
+  },
+  fill: (
+    m: PineMatrixInstance,
+    val: any,
+    fromRow = 0,
+    toRow?: number,
+    fromCol = 0,
+    toCol?: number
+  ) => {
+    if (!m?.__rows) return;
+    const rEnd = toRow !== undefined ? Math.min(m.__rows.length, toRow) : m.__rows.length;
+    for (let r = Math.max(0, fromRow); r < rEnd; r++) {
+      const cEnd = toCol !== undefined ? Math.min(m.__rows[r].length, toCol) : m.__rows[r].length;
+      for (let c = Math.max(0, fromCol); c < cEnd; c++) {
+        m.__rows[r][c] = val;
+      }
+    }
+  },
+  copy: (m: PineMatrixInstance): PineMatrixInstance => ({
+    __isPineMatrix: true,
+    __pineType: 'matrix',
+    __rows: m?.__rows ? m.__rows.map((r) => [...r]) : [],
+  }),
+  sum: (m: PineMatrixInstance) => {
+    if (!m?.__rows) return 0;
+    let s = 0;
+    for (const row of m.__rows) for (const v of row) if (Number.isFinite(v)) s += v;
+    return s;
+  },
+  avg: (m: PineMatrixInstance) => {
+    if (!m?.__rows) return NaN;
+    let s = 0;
+    let c = 0;
+    for (const row of m.__rows) {
+      for (const v of row) {
+        if (Number.isFinite(v)) {
+          s += v;
+          c++;
+        }
+      }
+    }
+    return c > 0 ? s / c : NaN;
+  },
+  min: (m: PineMatrixInstance) => {
+    if (!m?.__rows) return NaN;
+    let best = Infinity;
+    for (const row of m.__rows) for (const v of row) if (Number.isFinite(v) && v < best) best = v;
+    return Number.isFinite(best) ? best : NaN;
+  },
+  max: (m: PineMatrixInstance) => {
+    if (!m?.__rows) return NaN;
+    let best = -Infinity;
+    for (const row of m.__rows) for (const v of row) if (Number.isFinite(v) && v > best) best = v;
+    return Number.isFinite(best) ? best : NaN;
+  },
+  transpose: (m: PineMatrixInstance): PineMatrixInstance => {
+    if (!m?.__rows || m.__rows.length === 0) return createPineMatrix(0, 0);
+    const rows = m.__rows.length;
+    const cols = m.__rows[0].length;
+    const out: any[][] = [];
+    for (let c = 0; c < cols; c++) {
+      const rArr = new Array(rows);
+      for (let r = 0; r < rows; r++) rArr[r] = m.__rows[r][c];
+      out.push(rArr);
+    }
+    return { __isPineMatrix: true, __pineType: 'matrix', __rows: out };
+  },
 };
 
 // ============================================================================
@@ -387,6 +702,23 @@ export const PINE_STR_OBJECT = {
     }
     return String(val);
   },
+  tonumber: (s: any) => {
+    const n = Number(s);
+    return Number.isFinite(n) ? n : NaN;
+  },
+  format: (fmt: string, ...args: any[]) => {
+    return String(fmt ?? '').replace(/\{(\d+)(?:,[^}]*)?\}/g, (_, idxStr: string) => {
+      const val = args[Number(idxStr)];
+      return PINE_STR_OBJECT.tostring(val);
+    });
+  },
+  split: (s: string, sep: string) => {
+    const arr = String(s ?? '').split(String(sep ?? ''));
+    (arr as any).__isPineArray = true;
+    return arr;
+  },
+  substring: (s: string, start: number, end?: number) =>
+    String(s ?? '').substring(Math.max(0, Math.trunc(start)), end !== undefined ? Math.trunc(end) : undefined),
   length: (s: string) => String(s ?? '').length,
   contains: (s: string, sub: string) => String(s ?? '').includes(String(sub ?? '')),
   upper: (s: string) => String(s ?? '').toUpperCase(),
@@ -406,8 +738,33 @@ export const PINE_STR_OBJECT = {
 };
 
 // ============================================================================
-// Vectorized Pine v6 ta.* Library (40+ Functions + Multi-Output Tuples)
+// Vectorized Pine v6 ta.* Library (40+ Functions + Multi-Output Tuples + Dynamic Lengths)
 // ============================================================================
+
+export type PineLength = number | number[];
+
+export function lengthParam(val: any, len: number, fallback: number): PineLength {
+  if (Array.isArray(val) && val.length === len && !(val as any).__isPineArray) {
+    let firstFinite = NaN;
+    let varies = false;
+    for (let i = 0; i < len; i++) {
+      const n = Number(val[i]);
+      if (Number.isFinite(n)) {
+        if (!Number.isFinite(firstFinite)) firstFinite = n;
+        else if (n !== firstFinite) {
+          varies = true;
+          break;
+        }
+      } else if (Number.isFinite(firstFinite)) {
+        varies = true;
+        break;
+      }
+    }
+    if (!varies) return Number.isFinite(firstFinite) ? firstFinite : fallback;
+    return val.map((v) => Number(v));
+  }
+  return scalarParam(val, fallback);
+}
 
 export function toNumericSeries(val: any, len: number): number[] {
   if (Array.isArray(val) && val.length === len && typeof val[0] !== 'object') {
@@ -442,9 +799,29 @@ export function boolParam(val: any, fallback: boolean): boolean {
   return Boolean(val) && !Number.isNaN(val);
 }
 
-export function taSma(src: number[], length: number): number[] {
-  const n = Math.max(1, Math.round(length));
+export function taSma(src: number[], length: PineLength): number[] {
   const out = new Array<number>(src.length).fill(NaN);
+  if (Array.isArray(length)) {
+    for (let i = 0; i < src.length; i++) {
+      const rawN = length[i];
+      if (!Number.isFinite(rawN) || rawN < 1) continue;
+      const n = Math.max(1, Math.round(rawN));
+      if (i < n - 1) continue;
+      let sum = 0;
+      let ok = true;
+      for (let j = i - n + 1; j <= i; j++) {
+        const v = src[j];
+        if (!Number.isFinite(v)) {
+          ok = false;
+          break;
+        }
+        sum += v;
+      }
+      if (ok) out[i] = sum / n;
+    }
+    return out;
+  }
+  const n = Math.max(1, Math.round(length));
   let sum = 0;
   let valid = 0;
   for (let i = 0; i < src.length; i++) {
@@ -467,10 +844,23 @@ export function taSma(src: number[], length: number): number[] {
   return out;
 }
 
-export function taEma(src: number[], length: number): number[] {
+export function taEma(src: number[], length: PineLength): number[] {
+  const out = new Array<number>(src.length).fill(NaN);
+  if (Array.isArray(length)) {
+    let prev = NaN;
+    for (let i = 0; i < src.length; i++) {
+      const v = src[i];
+      const rawN = length[i];
+      if (!Number.isFinite(v) || !Number.isFinite(rawN) || rawN < 1) continue;
+      const n = Math.max(1, Math.round(rawN));
+      const k = 2 / (n + 1);
+      prev = !Number.isFinite(prev) ? v : v * k + prev * (1 - k);
+      out[i] = prev;
+    }
+    return out;
+  }
   const n = Math.max(1, Math.round(length));
   const k = 2 / (n + 1);
-  const out = new Array<number>(src.length).fill(NaN);
   let prev = NaN;
   for (let i = 0; i < src.length; i++) {
     const v = src[i];
@@ -481,10 +871,22 @@ export function taEma(src: number[], length: number): number[] {
   return out;
 }
 
-export function taRma(src: number[], length: number): number[] {
+export function taRma(src: number[], length: PineLength): number[] {
+  const out = new Array<number>(src.length).fill(NaN);
+  if (Array.isArray(length)) {
+    let prev = NaN;
+    for (let i = 0; i < src.length; i++) {
+      const v = src[i];
+      const rawN = length[i];
+      if (!Number.isFinite(v) || !Number.isFinite(rawN) || rawN < 1) continue;
+      const alpha = 1 / Math.max(1, Math.round(rawN));
+      prev = !Number.isFinite(prev) ? v : alpha * v + (1 - alpha) * prev;
+      out[i] = prev;
+    }
+    return out;
+  }
   const n = Math.max(1, Math.round(length));
   const alpha = 1 / n;
-  const out = new Array<number>(src.length).fill(NaN);
   let prev = NaN;
   for (let i = 0; i < src.length; i++) {
     const v = src[i];
@@ -571,10 +973,15 @@ export function taAlma(src: number[], length: number, offset = 0.85, sigma = 6):
   return out;
 }
 
-export function taLinreg(src: number[], length: number, offset = 0): number[] {
-  const n = Math.max(2, Math.round(length));
+export function taLinreg(src: number[], length: PineLength, offset = 0): number[] {
   const out = new Array<number>(src.length).fill(NaN);
-  for (let i = n - 1; i < src.length; i++) {
+  const isDyn = Array.isArray(length);
+  const staticN = isDyn ? 2 : Math.max(2, Math.round(length));
+  for (let i = 0; i < src.length; i++) {
+    const rawN = isDyn ? length[i] : staticN;
+    if (!Number.isFinite(rawN) || rawN < 2) continue;
+    const n = Math.max(2, Math.round(rawN));
+    if (i < n - 1) continue;
     let sumX = 0;
     let sumY = 0;
     let sumXY = 0;
@@ -643,10 +1050,26 @@ export function taRsi(src: number[], length: number): number[] {
   });
 }
 
-export function taVariance(src: number[], length: number): number[] {
-  const n = Math.max(1, Math.round(length));
-  const mean = taSma(src, n);
+export function taVariance(src: number[], length: PineLength): number[] {
   const out = new Array<number>(src.length).fill(NaN);
+  const mean = taSma(src, length);
+  if (Array.isArray(length)) {
+    for (let i = 0; i < src.length; i++) {
+      const m = mean[i];
+      const rawN = length[i];
+      if (!Number.isFinite(m) || !Number.isFinite(rawN) || rawN < 1) continue;
+      const n = Math.max(1, Math.round(rawN));
+      if (i < n - 1) continue;
+      let sumSq = 0;
+      for (let j = 0; j < n; j++) {
+        const d = src[i - j] - m;
+        sumSq += d * d;
+      }
+      out[i] = sumSq / n;
+    }
+    return out;
+  }
+  const n = Math.max(1, Math.round(length));
   for (let i = n - 1; i < src.length; i++) {
     const m = mean[i];
     if (!Number.isFinite(m)) continue;
@@ -660,7 +1083,7 @@ export function taVariance(src: number[], length: number): number[] {
   return out;
 }
 
-export function taStdev(src: number[], length: number): number[] {
+export function taStdev(src: number[], length: PineLength): number[] {
   return taVariance(src, length).map((v) => (Number.isFinite(v) ? Math.sqrt(v) : NaN));
 }
 
@@ -694,10 +1117,14 @@ export function taMedian(src: number[], length: number): number[] {
   return out;
 }
 
-export function taHighest(src: number[], length: number): number[] {
-  const n = Math.max(1, Math.round(length));
+export function taHighest(src: number[], length: PineLength): number[] {
   const out = new Array<number>(src.length).fill(NaN);
+  const isDyn = Array.isArray(length);
+  const staticN = isDyn ? 1 : Math.max(1, Math.round(length));
   for (let i = 0; i < src.length; i++) {
+    const rawN = isDyn ? length[i] : staticN;
+    if (!Number.isFinite(rawN) || rawN < 1) continue;
+    const n = Math.max(1, Math.round(rawN));
     let best = -Infinity;
     const start = Math.max(0, i - n + 1);
     for (let j = start; j <= i; j++) {
@@ -708,10 +1135,14 @@ export function taHighest(src: number[], length: number): number[] {
   return out;
 }
 
-export function taLowest(src: number[], length: number): number[] {
-  const n = Math.max(1, Math.round(length));
+export function taLowest(src: number[], length: PineLength): number[] {
   const out = new Array<number>(src.length).fill(NaN);
+  const isDyn = Array.isArray(length);
+  const staticN = isDyn ? 1 : Math.max(1, Math.round(length));
   for (let i = 0; i < src.length; i++) {
+    const rawN = isDyn ? length[i] : staticN;
+    if (!Number.isFinite(rawN) || rawN < 1) continue;
+    const n = Math.max(1, Math.round(rawN));
     let best = Infinity;
     const start = Math.max(0, i - n + 1);
     for (let j = start; j <= i; j++) {
@@ -722,10 +1153,14 @@ export function taLowest(src: number[], length: number): number[] {
   return out;
 }
 
-export function taHighestBars(src: number[], length: number): number[] {
-  const n = Math.max(1, Math.round(length));
+export function taHighestBars(src: number[], length: PineLength): number[] {
   const out = new Array<number>(src.length).fill(NaN);
+  const isDyn = Array.isArray(length);
+  const staticN = isDyn ? 1 : Math.max(1, Math.round(length));
   for (let i = 0; i < src.length; i++) {
+    const rawN = isDyn ? length[i] : staticN;
+    if (!Number.isFinite(rawN) || rawN < 1) continue;
+    const n = Math.max(1, Math.round(rawN));
     let best = -Infinity;
     let bestOffset = 0;
     const start = Math.max(0, i - n + 1);
@@ -740,10 +1175,14 @@ export function taHighestBars(src: number[], length: number): number[] {
   return out;
 }
 
-export function taLowestBars(src: number[], length: number): number[] {
-  const n = Math.max(1, Math.round(length));
+export function taLowestBars(src: number[], length: PineLength): number[] {
   const out = new Array<number>(src.length).fill(NaN);
+  const isDyn = Array.isArray(length);
+  const staticN = isDyn ? 1 : Math.max(1, Math.round(length));
   for (let i = 0; i < src.length; i++) {
+    const rawN = isDyn ? length[i] : staticN;
+    if (!Number.isFinite(rawN) || rawN < 1) continue;
+    const n = Math.max(1, Math.round(rawN));
     let best = Infinity;
     let bestOffset = 0;
     const start = Math.max(0, i - n + 1);
@@ -773,19 +1212,35 @@ export function taCci(src: number[], length: number): number[] {
   return out;
 }
 
-export function taMom(src: number[], length: number): number[] {
+export function taMom(src: number[], length: PineLength): number[] {
+  if (Array.isArray(length)) {
+    return src.map((v, i) => {
+      const rawN = length[i];
+      if (!Number.isFinite(rawN) || rawN < 1) return NaN;
+      const n = Math.max(1, Math.round(rawN));
+      return i >= n ? v - src[i - n] : NaN;
+    });
+  }
   const n = Math.max(1, Math.round(length));
   return src.map((v, i) => (i >= n ? v - src[i - n] : NaN));
 }
 
-export function taRoc(src: number[], length: number): number[] {
+export function taRoc(src: number[], length: PineLength): number[] {
+  if (Array.isArray(length)) {
+    return src.map((v, i) => {
+      const rawN = length[i];
+      if (!Number.isFinite(rawN) || rawN < 1) return NaN;
+      const n = Math.max(1, Math.round(rawN));
+      return i >= n && src[i - n] !== 0 ? ((v - src[i - n]) / src[i - n]) * 100 : NaN;
+    });
+  }
   const n = Math.max(1, Math.round(length));
   return src.map((v, i) =>
     i >= n && src[i - n] !== 0 ? ((v - src[i - n]) / src[i - n]) * 100 : NaN
   );
 }
 
-export function taChange(src: number[], length = 1): number[] {
+export function taChange(src: number[], length: PineLength = 1): number[] {
   return taMom(src, length);
 }
 
@@ -799,9 +1254,23 @@ export function taCum(src: number[]): number[] {
   return out;
 }
 
-export function taSum(src: number[], length: number): number[] {
-  const n = Math.max(1, Math.round(length));
+export function taSum(src: number[], length: PineLength): number[] {
   const out = new Array<number>(src.length).fill(NaN);
+  if (Array.isArray(length)) {
+    for (let i = 0; i < src.length; i++) {
+      const rawN = length[i];
+      if (!Number.isFinite(rawN) || rawN < 1) continue;
+      const n = Math.max(1, Math.round(rawN));
+      if (i < n - 1) continue;
+      let sum = 0;
+      for (let j = i - n + 1; j <= i; j++) {
+        sum += Number.isFinite(src[j]) ? src[j] : 0;
+      }
+      out[i] = sum;
+    }
+    return out;
+  }
+  const n = Math.max(1, Math.round(length));
   let sum = 0;
   for (let i = 0; i < src.length; i++) {
     sum += Number.isFinite(src[i]) ? src[i] : 0;
@@ -1121,14 +1590,22 @@ export function taBarsSince(cond: number[]): number[] {
   return out;
 }
 
-export function taValueWhen(cond: number[], src: number[], occurrence = 0): number[] {
-  const occ = Math.max(0, Math.round(occurrence));
+export function taValueWhen(
+  cond: number[],
+  src: number[],
+  occurrence: PineLength = 0
+): number[] {
   const out = new Array<number>(src.length).fill(NaN);
   const hits: number[] = [];
+  const isDyn = Array.isArray(occurrence);
+  const staticOcc = isDyn ? 0 : Math.max(0, Math.round(occurrence));
   for (let i = 0; i < src.length; i++) {
     if (Number.isFinite(cond[i]) && cond[i] !== 0) {
       hits.push(src[i]);
     }
+    const rawOcc = isDyn ? occurrence[i] : staticOcc;
+    if (!Number.isFinite(rawOcc) || rawOcc < 0) continue;
+    const occ = Math.max(0, Math.round(rawOcc));
     const idx = hits.length - 1 - occ;
     if (idx >= 0) out[i] = hits[idx];
   }

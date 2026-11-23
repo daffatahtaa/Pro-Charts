@@ -1,28 +1,51 @@
-import { KLineData } from 'klinecharts';
 import {
   ParsedPineScript,
   PineHlineDef,
   PineInputDef,
   PineParamValue,
   PinePlotDef,
+  PineRuntimeDiagnostic,
   PineStarterTemplate,
   PineVersion,
   SavedPineIndicator,
 } from './pine/pineTypes';
 import { parsePineScript } from './pine/pineParser';
-import { executeParsedPine, registerSavedPineWithKLine } from './pine/pineRuntime';
+import {
+  clearPineRuntimeDiagnostic,
+  executeParsedPine,
+  getAllPineRuntimeDiagnostics,
+  getPineRuntimeDiagnostic,
+  PineExecContext,
+  registerPineContextProvider,
+  registerSavedPineWithKLine,
+  resampleCandlesToTf,
+  subscribePineDiagnostics,
+  validatePineScript,
+} from './pine/pineRuntime';
 
 export type {
   ParsedPineScript,
+  PineExecContext,
   PineHlineDef,
   PineInputDef,
   PineParamValue,
   PinePlotDef,
+  PineRuntimeDiagnostic,
   PineStarterTemplate,
   PineVersion,
   SavedPineIndicator,
 };
-export { parsePineScript, executeParsedPine };
+export {
+  clearPineRuntimeDiagnostic,
+  executeParsedPine,
+  getAllPineRuntimeDiagnostics,
+  getPineRuntimeDiagnostic,
+  parsePineScript,
+  registerPineContextProvider,
+  resampleCandlesToTf,
+  subscribePineDiagnostics,
+  validatePineScript,
+};
 
 const LS_PINE_KEY = 'tv_custom_pine_indicators_v1';
 
@@ -172,26 +195,11 @@ export function compileAndRegisterPineScript(
   code: string,
   existingId?: string
 ): SavedPineIndicator {
-  const parsed = parsePineScript(code);
-
-  // Dry-run validate on 60 dummy bars to catch runtime syntax/function errors immediately
-  const dummyBars: KLineData[] = Array.from({ length: 60 }, (_, i) => {
-    const wave = Math.sin(i * 0.25) * 2.5;
-    const base = 100 + i * 0.15 + wave;
-    return {
-      timestamp: 1700000000000 + i * 60000,
-      open: base - 0.3,
-      high: base + 1.2,
-      low: base - 1.2,
-      close: base + 0.3,
-      volume: 100 + (i % 15) * 12,
-    };
-  });
-  executeParsedPine(
-    parsed,
-    dummyBars,
-    parsed.inputs.map((x) => x.defaultVal)
-  );
+  const check = validatePineScript(code);
+  if (!check.ok || !check.parsed) {
+    throw new Error(check.error || 'Failed to compile Pine Script');
+  }
+  const parsed = check.parsed;
 
   const list = getSavedPineIndicators();
   const existing = existingId ? list.find((s) => s.id === existingId) : undefined;

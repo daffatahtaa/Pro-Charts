@@ -6,6 +6,7 @@ import {
   PineHlineDef,
   PineInputDef,
   PineInputKind,
+  PinePlotCandleDef,
   PinePlotDef,
   PinePlotStyle,
   PineShapeDef,
@@ -19,6 +20,7 @@ import { resolvePineColorValue } from './pineTaLib';
 export interface LogicalLine {
   indent: number;
   text: string;
+  lineNum: number;
 }
 
 const DEFAULT_PALETTE = ['#2962ff', '#f59e0b', '#089981', '#f23645', '#9c27b0', '#00bcd4'];
@@ -102,6 +104,7 @@ export function joinLogicalLines(code: string): LogicalLine[] {
 
   let curText = '';
   let curIndent = 0;
+  let curLineNum = 1;
   let depth = 0;
 
   for (let i = 0; i < rawLines.length; i++) {
@@ -114,20 +117,22 @@ export function joinLogicalLines(code: string): LogicalLine[] {
     if (!curText) {
       curText = trimmed;
       curIndent = indent;
+      curLineNum = i + 1;
       depth = updateParenDepth(trimmed, 0);
     } else if (depth > 0 || endsWithContinuation(curText) || startsWithContinuation(trimmed)) {
       curText = `${curText} ${trimmed}`;
       depth = updateParenDepth(trimmed, depth);
     } else {
-      result.push({ indent: curIndent, text: curText });
+      result.push({ indent: curIndent, text: curText, lineNum: curLineNum });
       curText = trimmed;
       curIndent = indent;
+      curLineNum = i + 1;
       depth = updateParenDepth(trimmed, 0);
     }
   }
 
   if (curText) {
-    result.push({ indent: curIndent, text: curText });
+    result.push({ indent: curIndent, text: curText, lineNum: curLineNum });
   }
 
   return result;
@@ -244,24 +249,71 @@ function parseHlineStyle(raw: string | undefined): 'solid' | 'dashed' | 'dotted'
  * Strips Pine v6 type qualifiers (`var`, `varip`, `const`, `simple`, `series`, `int`, `float`, `bool`, `string`, `color`, `array<float>`, `float[]`)
  * from the left-hand side of a variable declaration.
  */
-function stripDeclarationPrefix(lhs: string): { varName: string; isVar: boolean } | null {
+function stripDeclarationPrefix(
+  lhs: string,
+  knownCustomTypes?: Set<string>
+): { varName: string; isVar: boolean } | null {
   let s = lhs.trim();
   let isVar = false;
   if (/^(?:varip|var)\s+/.test(s)) {
     isVar = true;
     s = s.replace(/^(?:varip|var)\s+/, '');
   }
-  // Remove optional qualifiers & built-in or custom PascalCase type annotations (e.g. `Cnd cd`, `array<Cnd> cs`)
+  // Remove optional qualifiers & built-in or custom PascalCase type annotations (e.g. `Cnd cd`, `array<Cnd> cs`, `map<string, float> m`)
   s = s.replace(/^(?:const|simple|series)\s+/, '');
   s = s.replace(
     /^(?:array<[^>]+>|matrix<[^>]+>|map<[^>]+>|(?:int|float|bool|string|color|box|line|label|table|polyline|linefill|[A-Z][a-zA-Z0-9_]*)(?:\[\])?)\s+/,
     ''
   );
   s = s.trim();
+  // Also allow lowercase custom type / enum names: `myType x` -> `x`
+  if (knownCustomTypes && knownCustomTypes.size > 0) {
+    const twoTok = /^([a-zA-Z_]\w*)\s+([a-zA-Z_]\w*)$/.exec(s);
+    if (twoTok && knownCustomTypes.has(twoTok[1])) {
+      s = twoTok[2];
+    }
+  }
   if (/^[a-zA-Z_]\w*$/.test(s)) {
     return { varName: s, isVar };
   }
   return null;
+}
+
+function parseParamList(rawParams: string): {
+  names: string[];
+  defaults: Array<string | undefined>;
+  firstType?: string;
+} {
+  if (!rawParams.trim()) return { names: [], defaults: [] };
+  const parts = splitTopLevelArgs(rawParams);
+  const names: string[] = [];
+  const defaults: Array<string | undefined> = [];
+  let firstType: string | undefined;
+
+  parts.forEach((p, idx) => {
+    const eqIdx = p.indexOf('=');
+    const lhs = (eqIdx >= 0 ? p.slice(0, eqIdx) : p).trim();
+    const defExpr = eqIdx >= 0 ? p.slice(eqIdx + 1).trim() : undefined;
+    // Strip qualifiers (`series`, `simple`, `const`)
+    const cleanLhs = lhs.replace(/^(?:const|simple|series)\s+/, '').trim();
+    // Handle `array<float> arr`, `map<string, float> m`, `MyType this`, `float x`, `x`
+    const genericMatch = /^(array|matrix|map)<[^>]+>\s+([a-zA-Z_]\w*)$/.exec(cleanLhs);
+    if (genericMatch) {
+      if (idx === 0) firstType = genericMatch[1];
+      names.push(genericMatch[2]);
+      defaults.push(defExpr);
+      return;
+    }
+    const tokens = cleanLhs.split(/\s+/);
+    const paramName = tokens[tokens.length - 1];
+    if (idx === 0 && tokens.length >= 2) {
+      firstType = tokens[tokens.length - 2].replace(/\[\]$/, '');
+    }
+    names.push(paramName);
+    defaults.push(defExpr);
+  });
+
+  return { names, defaults, firstType };
 }
 
 function addWarningOnce(warnings: string[], msg: string) {
@@ -398,6 +450,7 @@ export function parsePineScript(code: string): ParsedPineScript {
   const inputs: PineInputDef[] = [];
   const statements: PineStatement[] = [];
   const plots: PinePlotDef[] = [];
+  const plotCandles: PinePlotCandleDef[] = [];
   const fills: PineFillDef[] = [];
   const shapes: PineShapeDef[] = [];
   const hlines: PineHlineDef[] = [];
@@ -408,6 +461,41 @@ export function parsePineScript(code: string): ParsedPineScript {
   // Map `p1` -> `p0` or `hTop` -> `h0` for `fill(p1, p2, ...)`
   const handleMap: Record<string, string> = {};
   const constStrings: Record<string, string> = {};
+  const knownCustomTypes = new Set<string>();
+
+  function parseSwitchCases(
+    lines: LogicalLine[],
+    startIdx: number,
+    parentIndent: number
+  ): {
+    cases: Array<{ matchExpr: string | null; resultExpr: string; body?: PineStatement[] }>;
+    nextIdx: number;
+  } {
+    const cases: Array<{ matchExpr: string | null; resultExpr: string; body?: PineStatement[] }> = [];
+    let j = startIdx;
+    while (j < lines.length && lines[j].indent > parentIndent) {
+      const caseIndent = lines[j].indent;
+      const caseLine = lines[j].text;
+      const arrowIdx = caseLine.indexOf('=>');
+      if (arrowIdx >= 0) {
+        const left = caseLine.slice(0, arrowIdx).trim();
+        const right = caseLine.slice(arrowIdx + 2).trim();
+        if (!right && j + 1 < lines.length && lines[j + 1].indent > caseIndent) {
+          const block = parseBlockStatements(lines, j + 1, caseIndent + 1);
+          cases.push({
+            matchExpr: left || null,
+            resultExpr: block.lastExpr || 'na',
+            body: block.stmts,
+          });
+          j = block.nextIdx;
+          continue;
+        }
+        cases.push({ matchExpr: left || null, resultExpr: right || 'na' });
+      }
+      j++;
+    }
+    return { cases, nextIdx: j };
+  }
 
   function parseBlockStatements(
     lines: LogicalLine[],
@@ -466,29 +554,24 @@ export function parsePineScript(code: string): ParsedPineScript {
       }
 
       // Nested `switch` inside block (e.g. inside user function `f_pos(string s) => switch s ...`)
-      const nestedSwitch = /^(?:([^=]+?)\s*=\s*)?switch(?:\s+(.+))?$/.exec(line);
+      const nestedSwitch = /^(?:([^=]+?)\s*(:?=)\s*)?switch(?:\s+(.+))?$/.exec(line);
       if (nestedSwitch && (!nestedSwitch[1] || !/[<>!]$/.test(nestedSwitch[1].trim()))) {
-        const targetDecl = nestedSwitch[1] ? stripDeclarationPrefix(nestedSwitch[1]) : null;
-        const switchExpr = (nestedSwitch[2] || '').trim();
-        const cases: Array<{ matchExpr: string | null; resultExpr: string }> = [];
-        let j = i + 1;
-        while (j < lines.length && lines[j].indent > curIndent) {
-          const caseLine = lines[j].text;
-          const arrowIdx = caseLine.indexOf('=>');
-          if (arrowIdx >= 0) {
-            const left = caseLine.slice(0, arrowIdx).trim();
-            const right = caseLine.slice(arrowIdx + 2).trim();
-            cases.push({ matchExpr: left || null, resultExpr: right });
-          }
-          j++;
-        }
+        const isReassign = nestedSwitch[2] === ':=';
+        const targetDecl = nestedSwitch[1]
+          ? stripDeclarationPrefix(nestedSwitch[1], knownCustomTypes)
+          : null;
+        const switchExpr = (nestedSwitch[3] || '').trim();
+        const { cases, nextIdx } = parseSwitchCases(lines, i + 1, curIndent);
         stmts.push({
           kind: 'switch_assign',
+          lineNum: lines[i].lineNum,
           varName: targetDecl?.varName,
+          isVar: targetDecl?.isVar,
+          isReassign,
           switchExpr,
           cases,
         });
-        i = j;
+        i = nextIdx;
         continue;
       }
 
@@ -498,7 +581,24 @@ export function parsePineScript(code: string): ParsedPineScript {
         const inner = parseBlockStatements(lines, i + 1, curIndent + 1, enclosingCond);
         stmts.push({
           kind: 'while_loop',
+          lineNum: lines[i].lineNum,
           whileCond: whileMatch[1].trim(),
+          loopBody: inner.stmts,
+        });
+        i = inner.nextIdx;
+        continue;
+      }
+
+      // Nested `for [idx, item] in arr` tuple destructuring inside block
+      const forInTupleMatch = /^for\s+\[\s*([a-zA-Z_]\w*)\s*,\s*([a-zA-Z_]\w*)\s*\]\s+in\s+(.+)$/.exec(line);
+      if (forInTupleMatch) {
+        const inner = parseBlockStatements(lines, i + 1, curIndent + 1, enclosingCond);
+        stmts.push({
+          kind: 'for_in_loop',
+          lineNum: lines[i].lineNum,
+          loopIdxVar: forInTupleMatch[1],
+          loopVar: forInTupleMatch[2],
+          iterExpr: forInTupleMatch[3].trim(),
           loopBody: inner.stmts,
         });
         i = inner.nextIdx;
@@ -511,6 +611,7 @@ export function parsePineScript(code: string): ParsedPineScript {
         const inner = parseBlockStatements(lines, i + 1, curIndent + 1, enclosingCond);
         stmts.push({
           kind: 'for_in_loop',
+          lineNum: lines[i].lineNum,
           loopVar: forInMatch[1],
           iterExpr: forInMatch[2].trim(),
           loopBody: inner.stmts,
@@ -519,12 +620,18 @@ export function parsePineScript(code: string): ParsedPineScript {
         continue;
       }
 
-      // Nested `if / else if / else` inside block
-      const nestedIfAssign = /^([^=]+?)\s*=\s*if\s+(.+)$/.exec(line);
+      // Nested `if / else if / else` inside block (including `x = if ...` and `x := if ...`)
+      const nestedIfAssign = /^([^=]+?)\s*(:?=)\s*if\s+(.+)$/.exec(line);
       const nestedIfStmt = !nestedIfAssign ? /^if\s+(.+)$/.exec(line) : null;
-      if (nestedIfAssign || nestedIfStmt) {
-        const targetDecl = nestedIfAssign ? stripDeclarationPrefix(nestedIfAssign[1]) : null;
-        const firstCond = (nestedIfAssign ? nestedIfAssign[2] : nestedIfStmt![1]).trim();
+      if (
+        (nestedIfAssign && !/[<>!]$/.test(nestedIfAssign[1].trim())) ||
+        nestedIfStmt
+      ) {
+        const isReassign = nestedIfAssign ? nestedIfAssign[2] === ':=' : false;
+        const targetDecl = nestedIfAssign
+          ? stripDeclarationPrefix(nestedIfAssign[1], knownCustomTypes)
+          : null;
+        const firstCond = (nestedIfAssign ? nestedIfAssign[3] : nestedIfStmt![1]).trim();
         const branches: Array<{ cond: string | null; body: PineStatement[]; resultExpr?: string }> =
           [];
 
@@ -563,8 +670,10 @@ export function parsePineScript(code: string): ParsedPineScript {
 
         stmts.push({
           kind: 'if_block',
+          lineNum: lines[i].lineNum,
           varName: targetDecl?.varName,
           isVar: targetDecl?.isVar,
+          isReassign,
           branches,
         });
         i = j;
@@ -652,10 +761,11 @@ export function parsePineScript(code: string): ParsedPineScript {
       // Standard assignment `x = expr`
       const assignMatch = /^([^=]+?)\s*=(?![=>])\s*(.+)$/.exec(line);
       if (assignMatch && !/[<>!]$/.test(assignMatch[1].trim())) {
-        const decl = stripDeclarationPrefix(assignMatch[1]);
+        const decl = stripDeclarationPrefix(assignMatch[1], knownCustomTypes);
         if (decl) {
           stmts.push({
             kind: 'assign',
+            lineNum: lines[i].lineNum,
             varName: decl.varName,
             isVar: decl.isVar,
             expr: assignMatch[2].trim(),
@@ -668,7 +778,7 @@ export function parsePineScript(code: string): ParsedPineScript {
 
       // Standalone expression (e.g. `arr.push(x)` or return expression of an `if` expression)
       lastExpr = line;
-      stmts.push({ kind: 'assign', varName: '__expr_stmt', expr: line });
+      stmts.push({ kind: 'assign', lineNum: lines[i].lineNum, varName: '__expr_stmt', expr: line });
       i++;
     }
 
@@ -677,7 +787,7 @@ export function parsePineScript(code: string): ParsedPineScript {
 
   let idx = 0;
   while (idx < logicalLines.length) {
-    const { indent, text: line } = logicalLines[idx];
+    const { indent, text: line, lineNum } = logicalLines[idx];
 
     // 1. indicator(...) / study(...) / strategy(...)
     const headerMatch = /^(indicator|study|strategy)\s*\((.*)\)$/.exec(line);
@@ -702,15 +812,44 @@ export function parsePineScript(code: string): ParsedPineScript {
       continue;
     }
 
-    // 2. Non-fatal unsupported top-level directives & Pine v6 `type` / `max_bars_back`
+    // 2. Non-fatal unsupported top-level directives & Pine v6 `type` / `enum` / `method` / `max_bars_back`
     if (/^max_bars_back\s*\(/.test(line)) {
       idx++;
       continue;
     }
 
-    const typeMatch = /^type\s+([A-Z][a-zA-Z0-9_]*)$/.exec(line);
+    // 2a. Pine v6 `enum EnumName` declaration
+    const enumMatch = /^enum\s+([a-zA-Z_]\w*)$/.exec(line);
+    if (enumMatch) {
+      const enumName = enumMatch[1];
+      knownCustomTypes.add(enumName);
+      const members: Array<{ name: string; title?: string }> = [];
+      let j = idx + 1;
+      while (j < logicalLines.length && logicalLines[j].indent > indent) {
+        const mline = logicalLines[j].text.trim();
+        const eqIdx = mline.indexOf('=');
+        const mName = (eqIdx >= 0 ? mline.slice(0, eqIdx) : mline).trim();
+        const mTitle = eqIdx >= 0 ? unquote(mline.slice(eqIdx + 1).trim()) : undefined;
+        if (/^[a-zA-Z_]\w*$/.test(mName)) {
+          members.push({ name: mName, title: mTitle });
+        }
+        j++;
+      }
+      statements.push({
+        kind: 'enum_def',
+        lineNum,
+        varName: enumName,
+        enumMembers: members,
+      });
+      idx = j;
+      continue;
+    }
+
+    // 2b. Pine v6 `type TypeName` declaration
+    const typeMatch = /^type\s+([a-zA-Z_]\w*)$/.exec(line);
     if (typeMatch) {
       const typeName = typeMatch[1];
+      knownCustomTypes.add(typeName);
       const fields: Array<{ name: string; defaultExpr?: string }> = [];
       let j = idx + 1;
       while (j < logicalLines.length && logicalLines[j].indent > indent) {
@@ -727,6 +866,7 @@ export function parsePineScript(code: string): ParsedPineScript {
       }
       statements.push({
         kind: 'type_def',
+        lineNum,
         varName: typeName,
         typeFields: fields,
       });
@@ -734,13 +874,48 @@ export function parsePineScript(code: string): ParsedPineScript {
       continue;
     }
 
+    // 2c. Pine v6 `method fnName(ReceiverType this, ...params) => ...`
+    const methodMatch = /^method\s+([a-zA-Z_]\w*)\s*\(([^)]*)\)\s*=>\s*(.*)$/.exec(line);
+    if (methodMatch) {
+      const fnName = methodMatch[1];
+      const parsedParams = parseParamList(methodMatch[2]);
+      let body = methodMatch[3].trim();
+      let funcStmts: PineStatement[] | undefined;
+      if (!body) {
+        const block = parseBlockStatements(logicalLines, idx + 1, indent + 1);
+        funcStmts = block.stmts;
+        body = block.lastExpr || 'na';
+        idx = block.nextIdx;
+      } else {
+        // Parse single-line body as statement so `this.field := expr` works identically to multi-line methods!
+        const single = parseBlockStatements(
+          [{ indent: indent + 1, text: body, lineNum }],
+          0,
+          indent + 1
+        );
+        funcStmts = single.stmts;
+        idx++;
+      }
+      statements.push({
+        kind: 'method_def',
+        lineNum,
+        varName: fnName,
+        receiverType: parsedParams.firstType || 'any',
+        funcParams: parsedParams.names,
+        funcParamDefaults: parsedParams.defaults,
+        funcBody: body,
+        funcStmts,
+      });
+      continue;
+    }
+
     if (
-      /^(?:import\s+|export\s+|method\s+|alertcondition\s*\(|alert\s*\(|strategy\.(?:exit|close|close_all|cancel|risk))/.test(
+      /^(?:import\s+|export\s+|alertcondition\s*\(|alert\s*\(|strategy\.(?:exit|close|close_all|cancel|risk))/.test(
         line
       )
     ) {
       const kw = line.split(/[\s.(]/)[0];
-      addWarningOnce(warnings, `Non-fatal compatibility notice: skipped "${kw}" directive`);
+      addWarningOnce(warnings, `Line ${lineNum}: Non-fatal compatibility notice — skipped "${kw}" directive`);
       idx++;
       continue;
     }
@@ -885,6 +1060,38 @@ export function parsePineScript(code: string): ParsedPineScript {
       continue;
     }
 
+    // 7b. plotcandle(...) / plotbar(...)
+    const plotCandleMatch = /^(plotcandle|plotbar)\s*\((.*)\)$/.exec(line);
+    if (plotCandleMatch) {
+      const kind = plotCandleMatch[1] === 'plotbar' ? 'bar' : 'candle';
+      const { pos, named } = parseNamedAndPositional(splitTopLevelArgs(plotCandleMatch[2]));
+      const openExpr = (named.open || pos[0] || '').trim();
+      const highExpr = (named.high || pos[1] || '').trim();
+      const lowExpr = (named.low || pos[2] || '').trim();
+      const closeExpr = (named.close || pos[3] || '').trim();
+      if (openExpr && highExpr && lowExpr && closeExpr) {
+        const colorExpr = (named.color || pos[5] || 'close >= open ? color.green : color.red').trim();
+        const wickColorExpr = (named.wickcolor || pos[6] || colorExpr).trim();
+        const borderColorExpr = (named.bordercolor || pos[7] || colorExpr).trim();
+        const fallbackColor = resolvePineColorValue(colorExpr, '#2962ff');
+        plotCandles.push({
+          key: `pc${plotCandles.length}`,
+          kind,
+          openExpr,
+          highExpr,
+          lowExpr,
+          closeExpr,
+          title: unquote(named.title || pos[4], `PlotCandle ${plotCandles.length + 1}`),
+          colorExpr,
+          wickColorExpr,
+          borderColorExpr,
+          fallbackColor,
+        });
+      }
+      idx++;
+      continue;
+    }
+
     // 8. bgcolor(...)
     const bgMatch = /^bgcolor\s*\((.*)\)$/.exec(line);
     if (bgMatch) {
@@ -952,14 +1159,7 @@ export function parsePineScript(code: string): ParsedPineScript {
     const funcMatch = /^([a-zA-Z_]\w*)\s*\(([^)]*)\)\s*=>\s*(.*)$/.exec(line);
     if (funcMatch) {
       const fnName = funcMatch[1];
-      const rawParams = funcMatch[2].trim()
-        ? splitTopLevelArgs(funcMatch[2]).map((p) => {
-            // Strip optional type annotations or defaults: `series float x = 10` -> `x`
-            const noDef = p.split('=')[0].trim();
-            const parts = noDef.split(/\s+/);
-            return parts[parts.length - 1];
-          })
-        : [];
+      const parsedParams = parseParamList(funcMatch[2]);
       let body = funcMatch[3].trim();
       let funcStmts: PineStatement[] | undefined;
       if (!body) {
@@ -973,50 +1173,49 @@ export function parsePineScript(code: string): ParsedPineScript {
       }
       statements.push({
         kind: 'func_def',
+        lineNum,
         varName: fnName,
-        funcParams: rawParams,
+        funcParams: parsedParams.names,
+        funcParamDefaults: parsedParams.defaults,
         funcBody: body,
         funcStmts,
       });
       continue;
     }
 
-    // 12. Switch expression assignment: `ma = switch maType`
-    const switchAssignMatch = /^([^=]+?)\s*=\s*switch(?:\s+(.+))?$/.exec(line);
-    if (switchAssignMatch && !/[<>!]$/.test(switchAssignMatch[1].trim())) {
-      const decl = stripDeclarationPrefix(switchAssignMatch[1]);
-      if (decl) {
-        const switchExpr = (switchAssignMatch[2] || '').trim();
-        const cases: Array<{ matchExpr: string | null; resultExpr: string }> = [];
-        let j = idx + 1;
-        while (j < logicalLines.length && logicalLines[j].indent > indent) {
-          const caseLine = logicalLines[j].text;
-          const arrowIdx = caseLine.indexOf('=>');
-          if (arrowIdx >= 0) {
-            const left = caseLine.slice(0, arrowIdx).trim();
-            const right = caseLine.slice(arrowIdx + 2).trim();
-            cases.push({ matchExpr: left || null, resultExpr: right });
-          }
-          j++;
-        }
+    // 12. Switch expression assignment: `ma = switch maType` or `ma := switch maType`
+    const switchAssignMatch = /^(?:([^=]+?)\s*(:?=)\s*)?switch(?:\s+(.+))?$/.exec(line);
+    if (switchAssignMatch && (!switchAssignMatch[1] || !/[<>!]$/.test(switchAssignMatch[1].trim()))) {
+      const isReassign = switchAssignMatch[2] === ':=';
+      const decl = switchAssignMatch[1]
+        ? stripDeclarationPrefix(switchAssignMatch[1], knownCustomTypes)
+        : null;
+      if (!switchAssignMatch[1] || decl) {
+        const switchExpr = (switchAssignMatch[3] || '').trim();
+        const { cases, nextIdx } = parseSwitchCases(logicalLines, idx + 1, indent);
         statements.push({
           kind: 'switch_assign',
-          varName: decl.varName,
-          isVar: decl.isVar,
+          lineNum,
+          varName: decl?.varName,
+          isVar: decl?.isVar,
+          isReassign,
           switchExpr,
           cases,
         });
-        idx = j;
+        idx = nextIdx;
         continue;
       }
     }
 
-    // 13. Expression-returning `x = if cond` OR statement `if cond`
-    const ifAssignMatch = /^([^=]+?)\s*=\s*if\s+(.+)$/.exec(line);
+    // 13. Expression-returning `x = if cond` / `x := if cond` OR statement `if cond`
+    const ifAssignMatch = /^([^=]+?)\s*(:?=)\s*if\s+(.+)$/.exec(line);
     const ifStmtMatch = !ifAssignMatch ? /^if\s+(.+)$/.exec(line) : null;
-    if (ifAssignMatch || ifStmtMatch) {
-      const targetDecl = ifAssignMatch ? stripDeclarationPrefix(ifAssignMatch[1]) : null;
-      const firstCond = (ifAssignMatch ? ifAssignMatch[2] : ifStmtMatch![1]).trim();
+    if ((ifAssignMatch && !/[<>!]$/.test(ifAssignMatch[1].trim())) || ifStmtMatch) {
+      const isReassign = ifAssignMatch ? ifAssignMatch[2] === ':=' : false;
+      const targetDecl = ifAssignMatch
+        ? stripDeclarationPrefix(ifAssignMatch[1], knownCustomTypes)
+        : null;
+      const firstCond = (ifAssignMatch ? ifAssignMatch[3] : ifStmtMatch![1]).trim();
       const branches: Array<{ cond: string | null; body: PineStatement[]; resultExpr?: string }> = [];
 
       const firstBlock = parseBlockStatements(logicalLines, idx + 1, indent + 1, firstCond);
@@ -1054,21 +1253,40 @@ export function parsePineScript(code: string): ParsedPineScript {
 
       statements.push({
         kind: 'if_block',
+        lineNum,
         varName: targetDecl?.varName,
         isVar: targetDecl?.isVar,
+        isReassign,
         branches,
       });
       idx = j;
       continue;
     }
 
-    // 14. Top-level `while`, `for item in arr`, `for i = start to end [by step]`
+    // 14. Top-level `while`, `for [idx, item] in arr`, `for item in arr`, `for i = start to end [by step]`
     const topWhileMatch = /^while\s+(.+)$/.exec(line);
     if (topWhileMatch) {
       const block = parseBlockStatements(logicalLines, idx + 1, indent + 1);
       statements.push({
         kind: 'while_loop',
+        lineNum,
         whileCond: topWhileMatch[1].trim(),
+        loopBody: block.stmts,
+      });
+      idx = block.nextIdx;
+      continue;
+    }
+
+    const topForInTupleMatch =
+      /^for\s+\[\s*([a-zA-Z_]\w*)\s*,\s*([a-zA-Z_]\w*)\s*\]\s+in\s+(.+)$/.exec(line);
+    if (topForInTupleMatch) {
+      const block = parseBlockStatements(logicalLines, idx + 1, indent + 1);
+      statements.push({
+        kind: 'for_in_loop',
+        lineNum,
+        loopIdxVar: topForInTupleMatch[1],
+        loopVar: topForInTupleMatch[2],
+        iterExpr: topForInTupleMatch[3].trim(),
         loopBody: block.stmts,
       });
       idx = block.nextIdx;
@@ -1080,6 +1298,7 @@ export function parsePineScript(code: string): ParsedPineScript {
       const block = parseBlockStatements(logicalLines, idx + 1, indent + 1);
       statements.push({
         kind: 'for_in_loop',
+        lineNum,
         loopVar: topForInMatch[1],
         iterExpr: topForInMatch[2].trim(),
         loopBody: block.stmts,
@@ -1093,6 +1312,7 @@ export function parsePineScript(code: string): ParsedPineScript {
       const block = parseBlockStatements(logicalLines, idx + 1, indent + 1);
       statements.push({
         kind: 'for_loop',
+        lineNum,
         loopVar: forMatch[1],
         loopStart: forMatch[2].trim(),
         loopEnd: forMatch[3].trim(),
@@ -1108,6 +1328,7 @@ export function parsePineScript(code: string): ParsedPineScript {
     if (tupleMatch) {
       statements.push({
         kind: 'tuple_assign',
+        lineNum,
         varNames: tupleMatch[1].split(',').map((v) => v.trim()),
         expr: tupleMatch[2].trim(),
       });
@@ -1115,11 +1336,37 @@ export function parsePineScript(code: string): ParsedPineScript {
       continue;
     }
 
-    // 16. Compound assignment `x += expr`
+    // 16. Property compound assignment `obj.prop += expr` / reassignment `obj.prop := expr`
+    const topPropCompMatch = /^([a-zA-Z_]\w*\.[a-zA-Z_]\w*)\s*(\+=|-=|\*=|\/=)\s*(.+)$/.exec(line);
+    if (topPropCompMatch) {
+      statements.push({
+        kind: 'prop_compound',
+        lineNum,
+        propTarget: topPropCompMatch[1],
+        op: topPropCompMatch[2] as '+=' | '-=' | '*=' | '/=',
+        expr: topPropCompMatch[3].trim(),
+      });
+      idx++;
+      continue;
+    }
+    const topPropReassignMatch = /^([a-zA-Z_]\w*\.[a-zA-Z_]\w*)\s*:=\s*(.+)$/.exec(line);
+    if (topPropReassignMatch) {
+      statements.push({
+        kind: 'prop_assign',
+        lineNum,
+        propTarget: topPropReassignMatch[1],
+        expr: topPropReassignMatch[2].trim(),
+      });
+      idx++;
+      continue;
+    }
+
+    // 16b. Compound assignment `x += expr`
     const compMatch = /^([a-zA-Z_]\w*)\s*(\+=|-=|\*=|\/=)\s*(.+)$/.exec(line);
     if (compMatch) {
       statements.push({
         kind: 'compound_assign',
+        lineNum,
         varName: compMatch[1],
         op: compMatch[2] as '+=' | '-=' | '*=' | '/=',
         expr: compMatch[3].trim(),
@@ -1133,6 +1380,7 @@ export function parsePineScript(code: string): ParsedPineScript {
     if (reassignMatch) {
       statements.push({
         kind: 'reassign',
+        lineNum,
         varName: reassignMatch[1],
         expr: reassignMatch[2].trim(),
       });
@@ -1143,7 +1391,7 @@ export function parsePineScript(code: string): ParsedPineScript {
     // 18. Standard assignment `[var/type] foo = expr`
     const assignMatch = /^([^=]+?)\s*=(?![=>])\s*(.+)$/.exec(line);
     if (assignMatch && !/[<>!]$/.test(assignMatch[1].trim())) {
-      const decl = stripDeclarationPrefix(assignMatch[1]);
+      const decl = stripDeclarationPrefix(assignMatch[1], knownCustomTypes);
       if (decl) {
         const rhsTrim = assignMatch[2].trim();
         if (
@@ -1154,6 +1402,7 @@ export function parsePineScript(code: string): ParsedPineScript {
         }
         statements.push({
           kind: 'assign',
+          lineNum,
           varName: decl.varName,
           isVar: decl.isVar,
           expr: extractInlineInputs(rhsTrim, inputs),
@@ -1163,22 +1412,39 @@ export function parsePineScript(code: string): ParsedPineScript {
       }
     }
 
-    // 19. Bare expression statement (e.g. `arr.push(close)`)
-    if (/^[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)?\s*\(/.test(line)) {
-      statements.push({ kind: 'assign', varName: '__expr_stmt', expr: line });
+    // 19. Bare expression statement (e.g. `arr.push(close)`, `table.cell(...)`, `arr.get(0).set_x2(bar_index)`)
+    if (/^[a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*|\([^)]*\))*\s*\(/.test(line)) {
+      statements.push({ kind: 'assign', lineNum, varName: '__expr_stmt', expr: line });
+    } else if (line.trim()) {
+      addWarningOnce(warnings, `Line ${lineNum}: Unrecognized statement skipped — "${line.slice(0, 60)}"`);
     }
 
     idx++;
   }
 
-  // Backward compat: if no indicator() header specified overlay and script only plots price-level shapes, default overlay=false unless user explicitly set it
-  if (!overlaySpecified && plots.length === 0 && shapes.length > 0) {
+  const hasCanvasPrimitives = logicalLines.some((l) =>
+    /\b(?:line|box|label|table|linefill|polyline)\.new\s*\(/.test(l.text)
+  );
+
+  // Backward compat: if no indicator() header specified overlay and script only renders chart overlays (shapes/candles/drawings), default overlay=true
+  if (
+    !overlaySpecified &&
+    plots.length === 0 &&
+    (shapes.length > 0 || plotCandles.length > 0 || hasCanvasPrimitives)
+  ) {
     isMain = true;
   }
 
-  if (plots.length === 0 && shapes.length === 0 && bgColors.length === 0 && barColors.length === 0) {
+  if (
+    plots.length === 0 &&
+    plotCandles.length === 0 &&
+    shapes.length === 0 &&
+    bgColors.length === 0 &&
+    barColors.length === 0 &&
+    !hasCanvasPrimitives
+  ) {
     throw new Error(
-      'No visual output found. Add at least one plot(...), plotshape(...), bgcolor(...), or barcolor(...) call.'
+      'No visual output found. Add at least one plot(...), plotcandle(...), plotshape(...), bgcolor(...), barcolor(...), or drawing primitive (line.new / box.new / label.new / table.new / polyline.new).'
     );
   }
 
@@ -1191,6 +1457,7 @@ export function parsePineScript(code: string): ParsedPineScript {
     inputs,
     statements,
     plots,
+    plotCandles,
     fills,
     shapes,
     hlines,

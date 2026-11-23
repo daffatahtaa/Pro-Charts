@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   X,
   Plus,
@@ -15,12 +15,15 @@ import { useChartStore } from '../store/useChartStore';
 import {
   compileAndRegisterPineScript,
   deleteSavedPineIndicator,
+  getAllPineRuntimeDiagnostics,
   getSavedPineIndicators,
-  parsePineScript,
   PINE_STARTER_TEMPLATES,
   PineParamValue,
+  PineRuntimeDiagnostic,
   PineVersion,
   SavedPineIndicator,
+  subscribePineDiagnostics,
+  validatePineScript,
 } from '../services/pineEngine';
 
 function getVersionBadgeClass(v?: PineVersion): string {
@@ -131,14 +134,29 @@ export const IndicatorsModal: React.FC = () => {
   const [editingPineId, setEditingPineId] = useState<string | undefined>(undefined);
   const [pineCode, setPineCode] = useState<string>(PINE_STARTER_TEMPLATES[0].code);
   const [compileError, setCompileError] = useState<string | null>(null);
+  const [showWarningsList, setShowWarningsList] = useState(false);
+  const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<Record<string, PineRuntimeDiagnostic>>(
+    () => getAllPineRuntimeDiagnostics()
+  );
+
+  useEffect(() => {
+    return subscribePineDiagnostics(() => {
+      setRuntimeDiagnostics(getAllPineRuntimeDiagnostics());
+    });
+  }, []);
 
   const livePreview = useMemo(() => {
-    try {
-      const parsed = parsePineScript(pineCode);
-      return { ok: true as const, parsed };
-    } catch (err: any) {
-      return { ok: false as const, error: err?.message || 'Syntax error' };
+    const res = validatePineScript(pineCode);
+    if (res.ok && res.parsed) {
+      return { ok: true as const, parsed: res.parsed, warnings: res.warnings };
     }
+    return {
+      ok: false as const,
+      parsed: res.parsed,
+      phase: res.phase,
+      error: res.error || 'Syntax error',
+      warnings: res.warnings,
+    };
   }, [pineCode]);
 
   if (!indicatorsModalOpen) return null;
@@ -379,6 +397,14 @@ export const IndicatorsModal: React.FC = () => {
                           <p className="text-[11px] text-[#787b86] mt-0.5">
                             {item.plots.length} plot(s) · {item.inputs.length} input(s)
                           </p>
+                          {runtimeDiagnostics[item.name] && (
+                            <div className="mt-1 inline-flex items-center gap-1 text-[10.5px] text-[#f23645] bg-[#f23645]/10 border border-[#f23645]/30 rounded px-1.5 py-0.5 max-w-full">
+                              <AlertCircle className="w-3 h-3 shrink-0" />
+                              <span className="truncate" title={runtimeDiagnostics[item.name].message}>
+                                Runtime: {runtimeDiagnostics[item.name].message}
+                              </span>
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-1.5 shrink-0">
@@ -523,25 +549,33 @@ export const IndicatorsModal: React.FC = () => {
                     {livePreview.parsed.shapes.length > 0
                       ? ` · Shapes: ${livePreview.parsed.shapes.length}`
                       : ''}
+                    {livePreview.parsed.plotCandles?.length > 0
+                      ? ` · Candles: ${livePreview.parsed.plotCandles.length}`
+                      : ''}
                     {livePreview.parsed.hlines.length > 0
                       ? ` · Hlines: ${livePreview.parsed.hlines.length}`
                       : ''}
                   </span>
                   {livePreview.parsed.warnings.length > 0 && (
-                    <span
+                    <button
+                      type="button"
+                      onClick={() => setShowWarningsList((v) => !v)}
                       title={livePreview.parsed.warnings.join('\n')}
-                      className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-[#f59e0b]/15 text-[#f59e0b] border border-[#f59e0b]/30"
+                      className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-[#f59e0b]/15 text-[#f59e0b] border border-[#f59e0b]/30 cursor-pointer hover:bg-[#f59e0b]/25"
                     >
                       <AlertTriangle className="w-3 h-3 shrink-0" />
                       {livePreview.parsed.warnings.length} notice
                       {livePreview.parsed.warnings.length > 1 ? 's' : ''}
-                    </span>
+                    </button>
                   )}
                 </div>
               ) : (
-                <div className="flex items-center gap-1.5 text-[#f23645]">
+                <div className="flex items-center gap-1.5 text-[#f23645] min-w-0">
                   <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                  <span className="truncate">{livePreview.error}</span>
+                  <span className="truncate" title={livePreview.error}>
+                    {livePreview.phase === 'runtime' ? 'Runtime error: ' : 'Syntax error: '}
+                    {livePreview.error}
+                  </span>
                 </div>
               )}
               {editingPineId && (
@@ -553,6 +587,17 @@ export const IndicatorsModal: React.FC = () => {
                 </button>
               )}
             </div>
+
+            {showWarningsList && livePreview.warnings.length > 0 && (
+              <div className="px-4 py-1.5 border-b border-[#2a2e39] bg-[#f59e0b]/10 text-[#f59e0b] text-[11px] space-y-0.5 max-h-24 overflow-y-auto">
+                {livePreview.warnings.map((w, idx) => (
+                  <div key={idx} className="flex items-start gap-1.5">
+                    <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+                    <span>{w}</span>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* Code Editor Textarea */}
             <div className="flex-1 p-3 bg-[#131722] overflow-hidden flex flex-col">
@@ -590,8 +635,8 @@ export const IndicatorsModal: React.FC = () => {
             {/* Footer Actions */}
             <div className="px-4 py-2.5 border-t border-[#2a2e39] bg-[#1e222d] flex items-center justify-between gap-2">
               <span className="text-[11px] text-[#787b86]">
-                Pine v4/v5/v6: tuples, switch, if/else, for, var/:=, array.*, user functions, 40+
-                ta.*, fill(), plotshape(), bgcolor(), offset
+                Pine v6: type/method/enum, map/matrix/array, line/box/label/table/linefill/polyline,
+                plotcandle, MTF request.security, dynamic ta.*
               </span>
               <button
                 onClick={handleCompileAndAdd}
