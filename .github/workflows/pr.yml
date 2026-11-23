@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '24'
       - name: Install frontend deps
         working-directory: frontend
         run: npm ci
@@ -52,7 +52,7 @@ jobs:
           python-version: '3.11'
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '24'
       - name: Install deps
         run: pip install -r backend/requirements.txt
       - run: cd frontend && npm ci
