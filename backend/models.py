@@ -172,6 +172,12 @@ class BulkCloseRequest(BaseModel):
     tickets: list[int]
 
 
+class BulkModifyRequest(BaseModel):
+    tickets: list[int]
+    sl: Optional[float] = None  # None = keep current, 0.0 = clear
+    tp: Optional[float] = None
+
+
 class BulkResultResponse(BaseModel):
     success: bool
     results: list[TradeResultResponse]

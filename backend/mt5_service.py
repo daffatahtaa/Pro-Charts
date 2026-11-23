@@ -1667,9 +1667,8 @@ class MT5Service:
             "executed_volume": vol,
         }
 
-    def modify_position_sltp(self, req: ModifyPositionRequest) -> Dict[str, Any]:
-        with self._lock:
-            if self.connected and MT5_IMPORTED and mt5 is not None:
+    def _modify_one(self, req: ModifyPositionRequest) -> Dict[str, Any]:
+        if self.connected and MT5_IMPORTED and mt5 is not None:
                 info = mt5.symbol_info(req.symbol)
                 digits = int(info.digits) if info else 5
                 sl = round(float(req.sl), digits) if req.sl else 0.0
@@ -1766,6 +1765,64 @@ class MT5Service:
                 item["tp"] = float(req.tp)
                 return {"success": True, "retcode": 10009, "order_ticket": req.ticket, "message": f"[MOCK] Modified #{req.ticket}"}
         return {"success": False, "retcode": -1, "order_ticket": req.ticket, "message": f"Ticket #{req.ticket} not found"}
+
+    def modify_position_sltp(self, req: ModifyPositionRequest) -> Dict[str, Any]:
+        with self._lock:
+            return self._modify_one(req)
+
+    def _validate_sltp(self, side: str, open_price: float, sl: Optional[float], tp: Optional[float]) -> Optional[str]:
+        if sl is not None and sl != 0:
+            if side == "BUY" and sl >= open_price:
+                return f"Invalid SL ({sl}) for BUY position: SL must be below open price ({open_price})"
+            if side == "SELL" and sl <= open_price:
+                return f"Invalid SL ({sl}) for SELL position: SL must be above open price ({open_price})"
+        if tp is not None and tp != 0:
+            if side == "BUY" and tp <= open_price:
+                return f"Invalid TP ({tp}) for BUY position: TP must be above open price ({open_price})"
+            if side == "SELL" and tp >= open_price:
+                return f"Invalid TP ({tp}) for SELL position: TP must be below open price ({open_price})"
+        return None
+
+    def bulk_modify_sltp(self, tickets: List[int], sl: Optional[float], tp: Optional[float]) -> Tuple[bool, List[Dict[str, Any]], str]:
+        with self._lock:
+            results: List[Dict[str, Any]] = []
+            for t in tickets:
+                pos: Optional[Dict[str, Any]] = None
+                if self.connected and MT5_IMPORTED and mt5 is not None:
+                    live = mt5.positions_get(ticket=int(t))
+                    if live:
+                        p = live[0]
+                        pos = {
+                            "side": "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL",
+                            "open_price": float(p.price_open),
+                            "symbol": p.symbol,
+                            "sl": float(p.sl),
+                            "tp": float(p.tp),
+                        }
+                else:
+                    for mp in self._mock_positions:
+                        if mp["ticket"] == t:
+                            pos = {
+                                "side": mp["side"],
+                                "open_price": float(mp["open_price"]),
+                                "symbol": mp["symbol"],
+                                "sl": float(mp["sl"]),
+                                "tp": float(mp["tp"]),
+                            }
+                            break
+                if pos is None:
+                    results.append({"success": False, "retcode": -1, "order_ticket": t, "message": f"Position #{t} not found"})
+                    continue
+                err = self._validate_sltp(pos["side"], pos["open_price"], sl, tp)
+                if err:
+                    results.append({"success": False, "retcode": 10015, "order_ticket": t, "message": f"#{t}: {err}"})
+                    continue
+                eff_sl = sl if sl is not None else pos["sl"]
+                eff_tp = tp if tp is not None else pos["tp"]
+                req = ModifyPositionRequest(ticket=t, symbol=pos["symbol"], sl=eff_sl, tp=eff_tp, is_pending=False)
+                results.append(self._modify_one(req))
+        ok = sum(1 for r in results if r.get("success"))
+        return all(r.get("success") for r in results), results, f"{ok} modified, {len(results) - ok} failed"
 
     def _close_one(self, ticket: int) -> Dict[str, Any]:
         if self.connected and MT5_IMPORTED and mt5 is not None:
