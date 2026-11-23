@@ -31,6 +31,7 @@ export const BottomTradingDock: React.FC = () => {
     cancelPaperTrade,
     breakevenPaperTrade,
     bulkPaperModify,
+    bulkPaperClose,
     bulkScope,
     bulkPairFilter,
     selectedTickets,
@@ -47,6 +48,7 @@ export const BottomTradingDock: React.FC = () => {
   const [busyTicket, setBusyTicket] = useState<number | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkEditorOpen, setBulkEditorOpen] = useState(false);
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; kind: 'live' | 'paper'; symbol: string } | null>(null);
 
   const isPaper = replay.isActive;
@@ -140,6 +142,27 @@ export const BottomTradingDock: React.FC = () => {
     } finally {
       setBulkBusy(false);
       setBulkEditorOpen(false);
+    }
+  };
+
+  const scopeLabel =
+    bulkScope === 'all' ? 'All positions' : bulkScope === 'pair' ? bulkPairFilter : 'Selected positions';
+
+  const handleBulkClose = async () => {
+    setBulkBusy(true);
+    setBulkConfirmOpen(false);
+    try {
+      if (isPaper) {
+        bulkPaperClose(paperOpen.map((t) => t.id));
+      } else {
+        const res = await api.bulkClosePosition(bulkTargetTickets());
+        showToast(res.success ? 'success' : 'error', res.message);
+        await refreshTradeState();
+      }
+    } catch (err: any) {
+      showToast('error', err?.message || 'Bulk close failed');
+    } finally {
+      setBulkBusy(false);
     }
   };
 
@@ -453,7 +476,7 @@ export const BottomTradingDock: React.FC = () => {
                   Set SL/TP ({bulkCount})
                 </button>
                 <button
-                  onClick={() => showToast('info', 'Bulk close lands in the next commit')}
+                  onClick={() => setBulkConfirmOpen(true)}
                   disabled={bulkCount === 0 || bulkBusy}
                   className="px-2 py-0.5 rounded bg-[#089981]/15 hover:bg-[#089981]/30 text-[#089981] text-[10.5px] font-sans font-semibold disabled:opacity-40"
                 >
@@ -680,6 +703,19 @@ export const BottomTradingDock: React.FC = () => {
           >
             Bulk Set SL/TP ({ctxMenu.kind === 'live' ? ctxMenu.symbol : 'all paper'})
           </button>
+          <button
+            onClick={() => {
+              if (ctxMenu.kind === 'live') {
+                setBulkScope('pair');
+                setBulkPairFilter(ctxMenu.symbol);
+              }
+              setBulkConfirmOpen(true);
+              setCtxMenu(null);
+            }}
+            className="w-full text-left px-3 py-1.5 text-[11.5px] font-sans text-[#f23645] hover:bg-[#f23645]/15"
+          >
+            Bulk Close ({ctxMenu.kind === 'live' ? ctxMenu.symbol : 'all paper'})
+          </button>
         </div>
       )}
 
@@ -689,6 +725,38 @@ export const BottomTradingDock: React.FC = () => {
           onApply={handleBulkApply}
           onClose={() => setBulkEditorOpen(false)}
         />
+      )}
+
+      {bulkConfirmOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setBulkConfirmOpen(false)}
+        >
+          <div
+            className="w-[320px] rounded-lg bg-[#1e222d] border border-[#2a2e39] shadow-xl p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-[13px] font-sans font-semibold text-[#d1d4dc] mb-2">Bulk Close</h3>
+            <p className="text-[12px] font-sans text-[#787b86] mb-4">
+              Close {isPaper ? paperOpen.length : bulkCount} position(s)? Scope:{' '}
+              {isPaper ? 'All paper trades' : scopeLabel}
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setBulkConfirmOpen(false)}
+                className="px-3 py-1.5 rounded border border-[#2a2e39] text-[#d1d4dc] text-[12px] font-sans font-semibold hover:bg-[#2a2e39]/40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkClose}
+                className="px-3 py-1.5 rounded bg-[#f23645] hover:bg-[#f23645]/80 text-white text-[12px] font-sans font-semibold"
+              >
+                Close {isPaper ? paperOpen.length : bulkCount}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );
