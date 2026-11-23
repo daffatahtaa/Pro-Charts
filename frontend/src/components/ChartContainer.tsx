@@ -29,6 +29,7 @@ import {
   ActivePositionEditor,
   InteractiveTradeLayer,
 } from './InteractiveTradeLayer';
+import { ChartNewsOverlay } from './ChartNewsOverlay';
 import {
   ChartContextMenu,
   ChartOrderTicketModal,
@@ -3657,6 +3658,15 @@ export const ChartContainer: React.FC = () => {
         hoverCursor={hoverCursor}
         dragActiveRef={dragActiveRef}
         cancelDragRef={cancelDragRef}
+      />
+
+      {/* Parameterized Pair-Correlated News & Economic Events Strip (Issue #17) */}
+      <ChartNewsOverlay
+        chartRef={chartRef}
+        containerRef={containerRef}
+        yAxisWidth={axisDims.yAxisWidth}
+        xAxisHeight={axisDims.xAxisHeight}
+        coordTick={coordTick}
       />
 
       {/* Pick-on-Chart Banner */}

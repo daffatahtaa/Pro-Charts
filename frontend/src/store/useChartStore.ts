@@ -14,6 +14,7 @@ import {
   DEFAULT_CHART_SETTINGS,
   DEFAULT_PINNED_TIMEFRAMES,
   DrawingItem,
+  EconomicEventItem,
   getTimeframeSeconds,
   LayoutMode,
   LiveTick,
@@ -303,6 +304,11 @@ interface ChartStore {
   alerts: PriceAlertItem[];
   triggeredAlertNotice: { alert: PriceAlertItem; triggeredAt: number } | null;
 
+  // Economic Calendar & Pair-Correlated News (Issue #17)
+  chartNewsEvents: EconomicEventItem[];
+  chartNewsCurrencies: string[];
+  chartNewsLabel: string;
+
   // Bar Replay state
   replay: ReplayState;
 
@@ -404,6 +410,7 @@ interface ChartStore {
   setTimezone: (tz: string) => void;
 
   setAlerts: (alerts: PriceAlertItem[]) => void;
+  setChartNews: (events: EconomicEventItem[], currencies: string[], label: string) => void;
   addAlert: (alert: PriceAlertItem) => Promise<void>;
   updateAlertPrice: (
     id: string,
@@ -604,6 +611,9 @@ export const useChartStore = create<ChartStore>((set, get) => ({
 
   alerts: [],
   triggeredAlertNotice: null,
+  chartNewsEvents: [],
+  chartNewsCurrencies: ['USD'],
+  chartNewsLabel: '',
 
   replay: {
     isActive: false,
@@ -1441,6 +1451,9 @@ export const useChartStore = create<ChartStore>((set, get) => ({
   },
 
   setAlerts: (alerts) => set({ alerts }),
+
+  setChartNews: (chartNewsEvents, chartNewsCurrencies, chartNewsLabel) =>
+    set({ chartNewsEvents, chartNewsCurrencies, chartNewsLabel }),
 
   addAlert: async (alert) => {
     try {

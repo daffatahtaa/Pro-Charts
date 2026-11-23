@@ -3,6 +3,7 @@ import {
   BulkModifyPayload,
   BulkTradeResult,
   Candle,
+  ChartNewsResponse,
   DrawingItem,
   ModifyPositionPayload,
   MT5AccountsListResponse,
@@ -215,6 +216,34 @@ export const api = {
     return fetchJson(`${API_BASE}/alerts/${encodeURIComponent(alertId)}`, {
       method: 'DELETE',
     });
+  },
+
+  getChartNews(params: {
+    symbol: string;
+    scope?: string;
+    currencies?: string[];
+    impacts?: string[];
+    eventTypes?: string[];
+    fromTs?: number;
+    toTs?: number;
+    refresh?: boolean;
+  }): Promise<ChartNewsResponse> {
+    const q = new URLSearchParams();
+    q.set('symbol', params.symbol);
+    if (params.scope) q.set('scope', params.scope);
+    if (params.currencies && params.currencies.length > 0) {
+      q.set('currencies', params.currencies.join(','));
+    }
+    if (params.impacts && params.impacts.length > 0) {
+      q.set('impact', params.impacts.join(','));
+    }
+    if (params.eventTypes && params.eventTypes.length > 0) {
+      q.set('event_types', params.eventTypes.join(','));
+    }
+    if (params.fromTs !== undefined) q.set('from_ts', String(params.fromTs));
+    if (params.toTs !== undefined) q.set('to_ts', String(params.toTs));
+    if (params.refresh) q.set('refresh', 'true');
+    return fetchJson<ChartNewsResponse>(`${API_BASE}/news?${q.toString()}`);
   },
 
   getSavedAccounts(): Promise<MT5AccountsListResponse> {

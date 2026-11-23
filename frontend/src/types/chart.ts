@@ -127,6 +127,34 @@ export type MagnetMode = 'normal' | 'weak_magnet' | 'strong_magnet';
 
 export type TradeLineStyle = 'solid' | 'dashed' | 'dotted';
 export type UiScalePreset = 0.8 | 0.9 | 1.0 | 1.1 | 1.25;
+export type NewsImpactLevel = 'high' | 'medium' | 'low';
+export type NewsCorrelationScope = 'correlated' | 'all' | 'custom';
+export type NewsTimeRangeMode = 'upcoming' | 'all';
+
+export interface EconomicEventItem {
+  id: string;
+  title: string;
+  country: string;
+  impact: NewsImpactLevel;
+  category: 'calendar' | 'news';
+  event_time_ms: number;
+  actual: string;
+  forecast: string;
+  previous: string;
+  source: string;
+  url: string;
+  fetched_at?: number;
+}
+
+export interface ChartNewsResponse {
+  symbol: string;
+  clean_symbol: string;
+  asset_class: string;
+  resolved_currencies: string[];
+  correlation_label: string;
+  events: EconomicEventItem[];
+  cached_at_ms: number;
+}
 
 export interface ChartThemeSettings {
   bullBodyColor: string;
@@ -166,6 +194,14 @@ export interface ChartThemeSettings {
   slLineColor: string;
   tpLineColor: string;
   uiScale: number;
+  showChartNews: boolean;
+  newsImpacts: NewsImpactLevel[];
+  newsScope: NewsCorrelationScope;
+  newsCustomCurrencies: string[];
+  newsShowCalendar: boolean;
+  newsShowHeadlines: boolean;
+  newsTimeMode: NewsTimeRangeMode;
+  newsShowGuidelineOnHover: boolean;
   showOhlcValues: boolean;
   showBarChange: boolean;
   showVolumeValue: boolean;
@@ -210,6 +246,14 @@ export const DEFAULT_CHART_SETTINGS: ChartThemeSettings = {
   slLineColor: '#f23645',
   tpLineColor: '#089981',
   uiScale: 1.0,
+  showChartNews: true,
+  newsImpacts: ['high', 'medium'],
+  newsScope: 'correlated',
+  newsCustomCurrencies: ['USD', 'EUR', 'GBP', 'JPY'],
+  newsShowCalendar: true,
+  newsShowHeadlines: false,
+  newsTimeMode: 'all',
+  newsShowGuidelineOnHover: true,
   showOhlcValues: true,
   showBarChange: true,
   showVolumeValue: true,

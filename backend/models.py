@@ -89,6 +89,31 @@ class PriceAlertModel(BaseModel):
     created_at: Optional[int] = None
 
 
+class EconomicEventItem(BaseModel):
+    id: str
+    title: str
+    country: str
+    impact: str  # 'high' | 'medium' | 'low'
+    category: str = "calendar"  # 'calendar' | 'news'
+    event_time_ms: int
+    actual: str = ""
+    forecast: str = ""
+    previous: str = ""
+    source: str = ""
+    url: str = ""
+    fetched_at: int = 0
+
+
+class ChartNewsResponse(BaseModel):
+    symbol: str
+    clean_symbol: str = ""
+    asset_class: str = "Macro"
+    resolved_currencies: List[str] = Field(default_factory=list)
+    correlation_label: str = ""
+    events: List[EconomicEventItem] = Field(default_factory=list)
+    cached_at_ms: int = 0
+
+
 class WindowStateRequest(BaseModel):
     hidden: bool
 

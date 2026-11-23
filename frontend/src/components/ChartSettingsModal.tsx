@@ -1,7 +1,13 @@
 import React, { useState } from 'react';
-import { X, RotateCcw, Palette, Layers, Sliders } from 'lucide-react';
+import { X, RotateCcw, Palette, Layers, Sliders, Newspaper } from 'lucide-react';
 import { useChartStore } from '../store/useChartStore';
-import { ChartThemeSettings, DEFAULT_CHART_SETTINGS } from '../types/chart';
+import {
+  ChartThemeSettings,
+  DEFAULT_CHART_SETTINGS,
+  NewsImpactLevel,
+} from '../types/chart';
+
+const NEWS_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD'];
 
 const THEME_PRESETS: Array<{
   name: string;
@@ -70,14 +76,16 @@ const THEME_PRESETS: Array<{
 
 export const ChartSettingsModal: React.FC = () => {
   const {
+    symbol,
     chartSettingsModalOpen,
     setChartSettingsModalOpen,
     chartSettings,
     updateChartSettings,
     resetChartSettings,
+    chartNewsLabel,
   } = useChartStore();
 
-  const [tab, setTab] = useState<'symbol' | 'canvas' | 'presets'>('symbol');
+  const [tab, setTab] = useState<'symbol' | 'canvas' | 'events' | 'presets'>('symbol');
 
   if (!chartSettingsModalOpen) return null;
 
@@ -125,6 +133,17 @@ export const ChartSettingsModal: React.FC = () => {
             >
               <Layers className="w-3.5 h-3.5" />
               <span>Canvas</span>
+            </button>
+            <button
+              onClick={() => setTab('events')}
+              className={`flex items-center gap-2 px-3 py-2 rounded text-[12px] font-medium transition-colors ${
+                tab === 'events'
+                  ? 'bg-[#2962ff]/15 text-[#2962ff]'
+                  : 'text-[#d1d4dc] hover:bg-[#2a2e39]'
+              }`}
+            >
+              <Newspaper className="w-3.5 h-3.5" />
+              <span>Events / News</span>
             </button>
             <button
               onClick={() => setTab('presets')}
@@ -726,6 +745,207 @@ export const ChartSettingsModal: React.FC = () => {
                   />
                   One-Click Buy / Sell Buttons
                 </label>
+              </>
+            )}
+
+            {tab === 'events' && (
+              <>
+                <div className="text-[11px] uppercase tracking-wider text-[#787b86]">
+                  Economic Events &amp; Pair-Correlated News
+                </div>
+
+                <label className="flex items-center gap-2 text-[12.5px] text-[#d1d4dc] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={chartSettings.showChartNews !== false}
+                    onChange={(e) =>
+                      updateChartSettings({ showChartNews: e.target.checked })
+                    }
+                    className="accent-[#2962ff]"
+                  />
+                  Show Economic Events on Chart Bottom
+                </label>
+
+                <div
+                  className={`space-y-3.5 transition-opacity ${
+                    chartSettings.showChartNews !== false
+                      ? 'opacity-100'
+                      : 'opacity-45 pointer-events-none'
+                  }`}
+                >
+                  {/* Impact Importance Multi-Select */}
+                  <div className="space-y-1.5">
+                    <span className="text-[11.5px] text-[#787b86]">Impact / Importance Filter</span>
+                    <div className="flex items-center gap-2">
+                      {(
+                        [
+                          { id: 'high', label: 'High', color: '#f23645' },
+                          { id: 'medium', label: 'Medium', color: '#f59e0b' },
+                          { id: 'low', label: 'Low', color: '#eab308' },
+                        ] as Array<{ id: NewsImpactLevel; label: string; color: string }>
+                      ).map((imp) => {
+                        const activeList = chartSettings.newsImpacts || ['high', 'medium'];
+                        const checked = activeList.includes(imp.id);
+                        return (
+                          <button
+                            key={imp.id}
+                            type="button"
+                            onClick={() => {
+                              const next = checked
+                                ? activeList.filter((i) => i !== imp.id)
+                                : [...activeList, imp.id];
+                              if (next.length > 0) {
+                                updateChartSettings({ newsImpacts: next });
+                              }
+                            }}
+                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11.5px] font-medium transition-colors cursor-pointer ${
+                              checked
+                                ? 'bg-[#131722] border-[#2962ff] text-white'
+                                : 'bg-[#131722]/40 border-[#2a2e39] text-[#787b86]'
+                            }`}
+                          >
+                            <span
+                              className="w-2.5 h-2.5 rounded-full"
+                              style={{ backgroundColor: imp.color }}
+                            />
+                            <span>{imp.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Correlation Scope */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11.5px] text-[#787b86]">Correlation Scope</span>
+                      {chartNewsLabel && (
+                        <span className="text-[10.5px] font-mono-num text-[#2962ff]">
+                          Active: {symbol} → {chartNewsLabel}
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {(
+                        [
+                          { id: 'correlated', label: 'Active Pair' },
+                          { id: 'all', label: 'All Majors' },
+                          { id: 'custom', label: 'Custom' },
+                        ] as const
+                      ).map((sc) => (
+                        <button
+                          key={sc.id}
+                          type="button"
+                          onClick={() => updateChartSettings({ newsScope: sc.id })}
+                          className={`py-1.5 rounded border text-[11.5px] font-medium transition-colors cursor-pointer ${
+                            (chartSettings.newsScope || 'correlated') === sc.id
+                              ? 'bg-[#2962ff] border-[#2962ff] text-white'
+                              : 'bg-[#131722] border-[#2a2e39] text-[#d1d4dc] hover:border-[#2962ff]/60'
+                          }`}
+                        >
+                          {sc.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {chartSettings.newsScope === 'custom' && (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {NEWS_CURRENCIES.map((code) => {
+                          const list = chartSettings.newsCustomCurrencies || ['USD', 'EUR', 'GBP', 'JPY'];
+                          const active = list.includes(code);
+                          return (
+                            <button
+                              key={code}
+                              type="button"
+                              onClick={() => {
+                                const next = active
+                                  ? list.filter((c) => c !== code)
+                                  : [...list, code];
+                                if (next.length > 0) {
+                                  updateChartSettings({ newsCustomCurrencies: next });
+                                }
+                              }}
+                              className={`px-2 py-0.5 rounded border text-[11px] font-mono-num font-semibold cursor-pointer ${
+                                active
+                                  ? 'bg-[#2962ff]/20 border-[#2962ff] text-[#2962ff]'
+                                  : 'bg-[#131722] border-[#2a2e39] text-[#787b86]'
+                              }`}
+                            >
+                              {code}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Event Types */}
+                  <div className="space-y-1.5">
+                    <span className="text-[11.5px] text-[#787b86]">Event Types</span>
+                    <div className="space-y-1.5">
+                      <label className="flex items-center gap-2 text-[12px] text-[#d1d4dc] cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={chartSettings.newsShowCalendar !== false}
+                          onChange={(e) =>
+                            updateChartSettings({ newsShowCalendar: e.target.checked })
+                          }
+                          className="accent-[#2962ff]"
+                        />
+                        Economic Calendar (Actual / Forecast / Previous)
+                      </label>
+                      <label className="flex items-center gap-2 text-[12px] text-[#d1d4dc] cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(chartSettings.newsShowHeadlines)}
+                          onChange={(e) =>
+                            updateChartSettings({ newsShowHeadlines: e.target.checked })
+                          }
+                          className="accent-[#2962ff]"
+                        />
+                        Correlated Market News Headlines
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Time Range Mode */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] text-[#d1d4dc]">Time Range Display</span>
+                    <div className="flex items-center rounded bg-[#131722] border border-[#2a2e39] p-0.5">
+                      {(
+                        [
+                          { id: 'all', label: 'Historical + Upcoming' },
+                          { id: 'upcoming', label: 'Upcoming Only' },
+                        ] as const
+                      ).map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => updateChartSettings({ newsTimeMode: m.id })}
+                          className={`px-2 py-0.5 rounded text-[10.5px] cursor-pointer ${
+                            (chartSettings.newsTimeMode || 'all') === m.id
+                              ? 'bg-[#2962ff] text-white font-semibold'
+                              : 'text-[#787b86] hover:text-[#d1d4dc]'
+                          }`}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <label className="flex items-center gap-2 text-[12px] text-[#d1d4dc] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={chartSettings.newsShowGuidelineOnHover !== false}
+                      onChange={(e) =>
+                        updateChartSettings({ newsShowGuidelineOnHover: e.target.checked })
+                      }
+                      className="accent-[#2962ff]"
+                    />
+                    Show vertical candle guideline on hover/click
+                  </label>
+                </div>
               </>
             )}
 

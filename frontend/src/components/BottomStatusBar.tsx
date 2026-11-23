@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Clock, Check, History, Calendar } from 'lucide-react';
+import { Clock, Check, History, Calendar, Newspaper } from 'lucide-react';
 import { useChartStore } from '../store/useChartStore';
 import { getTimeframeSeconds, TIMEZONE_OPTIONS } from '../types/chart';
 
@@ -20,7 +20,10 @@ export const BottomStatusBar: React.FC = () => {
     timezone,
     setTimezone,
     chartSettings,
+    updateChartSettings,
     setChartSettingsModalOpen,
+    chartNewsEvents,
+    replay,
     bridge,
   } = useChartStore();
 
@@ -133,8 +136,62 @@ export const BottomStatusBar: React.FC = () => {
         </div>
       </div>
 
-      {/* Right: TradingView Timezone Picker + Scale Toggles */}
+      {/* Right: News Quick Toggle + TradingView Timezone Picker + Scale Toggles */}
       <div className="flex items-center gap-2">
+        {(() => {
+          const newsEnabled = chartSettings.showChartNews !== false;
+          const nowRef = replay.isActive && replay.replayTimeMs > 0 ? replay.replayTimeMs : Date.now();
+          const upcoming = chartNewsEvents.find((e) => e.event_time_ms >= nowRef);
+          const minsAway = upcoming ? Math.max(1, Math.round((upcoming.event_time_ms - nowRef) / 60000)) : null;
+          const cdText =
+            minsAway !== null
+              ? minsAway >= 1440
+                ? `${Math.floor(minsAway / 1440)}d`
+                : minsAway >= 60
+                ? `${Math.floor(minsAway / 60)}h ${minsAway % 60}m`
+                : `${minsAway}m`
+              : '';
+          return (
+            <button
+              onClick={() => updateChartSettings({ showChartNews: !newsEnabled })}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setChartSettingsModalOpen(true);
+              }}
+              title="Toggle Economic Events on Chart (Right-click for News Settings)"
+              className={`flex items-center gap-1 px-2 h-[22px] rounded transition-colors cursor-pointer ${
+                newsEnabled
+                  ? 'text-[#d1d4dc] bg-[#2962ff]/12 hover:bg-[#2962ff]/20'
+                  : 'text-[#787b86] hover:text-[#d1d4dc] hover:bg-[#2a2e39]'
+              }`}
+            >
+              <Newspaper className="w-3 h-3 text-[#2962ff]" />
+              {newsEnabled && upcoming ? (
+                <span className="flex items-center gap-1 text-[10.5px]">
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      upcoming.impact === 'high'
+                        ? 'bg-[#f23645]'
+                        : upcoming.impact === 'medium'
+                        ? 'bg-[#f59e0b]'
+                        : 'bg-[#eab308]'
+                    }`}
+                  />
+                  <span className="font-semibold">{upcoming.country}</span>
+                  <span className="hidden xl:inline truncate max-w-[90px] text-[#9598a1]">
+                    {upcoming.title}
+                  </span>
+                  <span className="font-mono-num text-[#f59e0b]">{cdText}</span>
+                </span>
+              ) : (
+                <span className="text-[10.5px]">Events</span>
+              )}
+            </button>
+          );
+        })()}
+
+        <div className="w-[1px] h-3.5 bg-[#2a2e39]" />
+
         <div className="relative" ref={tzRef}>
           <button
             onClick={() => setTzOpen((v) => !v)}

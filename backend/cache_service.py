@@ -121,6 +121,24 @@ class CacheService:
             )
             self.conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS economic_events (
+                    id VARCHAR PRIMARY KEY,
+                    title VARCHAR NOT NULL,
+                    country VARCHAR NOT NULL,
+                    impact VARCHAR NOT NULL,
+                    category VARCHAR DEFAULT 'calendar',
+                    event_time_ms BIGINT NOT NULL,
+                    actual VARCHAR DEFAULT '',
+                    forecast VARCHAR DEFAULT '',
+                    previous VARCHAR DEFAULT '',
+                    source VARCHAR DEFAULT '',
+                    url VARCHAR DEFAULT '',
+                    fetched_at BIGINT NOT NULL
+                );
+                """
+            )
+            self.conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS saved_mt5_accounts (
                     login BIGINT PRIMARY KEY,
                     password VARCHAR NOT NULL,
@@ -646,6 +664,110 @@ class CacheService:
         with self._lock:
             self.conn.execute("DELETE FROM chart_drawings WHERE symbol = ?", (symbol,))
         return True
+
+    # --- Economic Calendar & News Cache (Issue #17) ---
+
+    def upsert_economic_events(self, events: List[Dict[str, Any]]) -> int:
+        if not events:
+            return 0
+        now_ms = int(time.time() * 1000)
+        rows = [
+            (
+                str(ev["id"]),
+                str(ev.get("title") or ""),
+                str(ev.get("country") or "USD").upper(),
+                str(ev.get("impact") or "low").lower(),
+                str(ev.get("category") or "calendar").lower(),
+                int(ev["event_time_ms"]),
+                str(ev.get("actual") or ""),
+                str(ev.get("forecast") or ""),
+                str(ev.get("previous") or ""),
+                str(ev.get("source") or ""),
+                str(ev.get("url") or ""),
+                int(ev.get("fetched_at") or now_ms),
+            )
+            for ev in events
+            if ev.get("id") and ev.get("event_time_ms")
+        ]
+        if not rows:
+            return 0
+        with self._lock:
+            self.conn.executemany(
+                """
+                INSERT OR REPLACE INTO economic_events
+                    (id, title, country, impact, category, event_time_ms,
+                     actual, forecast, previous, source, url, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+        return len(rows)
+
+    def get_economic_events(
+        self,
+        countries: Optional[List[str]] = None,
+        impacts: Optional[List[str]] = None,
+        categories: Optional[List[str]] = None,
+        from_ts: Optional[int] = None,
+        to_ts: Optional[int] = None,
+        limit: int = 400,
+    ) -> List[Dict[str, Any]]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if countries:
+            upper_c = [c.upper() for c in countries if c]
+            if upper_c:
+                placeholders = ", ".join(["?"] * len(upper_c))
+                clauses.append(f"country IN ({placeholders})")
+                params.extend(upper_c)
+        if impacts:
+            low_i = [i.lower() for i in impacts if i]
+            if low_i:
+                placeholders = ", ".join(["?"] * len(low_i))
+                clauses.append(f"impact IN ({placeholders})")
+                params.extend(low_i)
+        if categories:
+            low_cat = [c.lower() for c in categories if c]
+            if low_cat:
+                placeholders = ", ".join(["?"] * len(low_cat))
+                clauses.append(f"category IN ({placeholders})")
+                params.extend(low_cat)
+        if from_ts is not None:
+            clauses.append("event_time_ms >= ?")
+            params.append(int(from_ts))
+        if to_ts is not None:
+            clauses.append("event_time_ms <= ?")
+            params.append(int(to_ts))
+
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"""
+            SELECT id, title, country, impact, category, event_time_ms,
+                   actual, forecast, previous, source, url, fetched_at
+            FROM economic_events
+            {where_sql}
+            ORDER BY event_time_ms ASC
+            LIMIT ?
+        """
+        params.append(int(limit))
+        with self._lock:
+            rows = self.conn.execute(sql, params).fetchall()
+        return [
+            {
+                "id": r[0],
+                "title": r[1],
+                "country": r[2],
+                "impact": r[3],
+                "category": r[4],
+                "event_time_ms": int(r[5]),
+                "actual": r[6] or "",
+                "forecast": r[7] or "",
+                "previous": r[8] or "",
+                "source": r[9] or "",
+                "url": r[10] or "",
+                "fetched_at": int(r[11]),
+            }
+            for r in rows
+        ]
 
     # --- Price Alerts CRUD ---
 

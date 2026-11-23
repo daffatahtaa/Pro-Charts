@@ -26,6 +26,7 @@ from models import (
     BulkModifyRequest,
     BulkResultResponse,
     CandlesResponse,
+    ChartNewsResponse,
     CustomServerRequest,
     DailyNoteRequest,
     DrawingModel,
@@ -45,6 +46,9 @@ from models import (
     WindowStateResponse,
 )
 from mt5_service import mt5_service, normalize_tf_code, parse_tf_seconds
+from news_service import NewsService
+
+news_service = NewsService(cache_service=cache_service)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -307,6 +311,31 @@ async def delete_drawing(drawing_id: str):
 async def delete_drawings_for_symbol(symbol: str = Query(...)):
     cache_service.delete_drawings_by_symbol(symbol)
     return {"deleted": True, "symbol": symbol}
+
+
+@app.get("/api/news", response_model=ChartNewsResponse)
+async def get_chart_news(
+    symbol: str = Query(default="XAUUSD"),
+    scope: str = Query(default="correlated", description="correlated | all | custom"),
+    currencies: str = Query(default="", description="Comma-separated currencies when scope=custom"),
+    impact: str = Query(default="high,medium", description="Comma-separated high,medium,low"),
+    event_types: str = Query(default="calendar", description="Comma-separated calendar,news"),
+    from_ts: Optional[int] = Query(default=None),
+    to_ts: Optional[int] = Query(default=None),
+    refresh: bool = Query(default=False),
+):
+    data = await asyncio.to_thread(
+        news_service.get_news_for_chart,
+        symbol,
+        scope,
+        currencies,
+        impact,
+        event_types,
+        from_ts,
+        to_ts,
+        refresh,
+    )
+    return ChartNewsResponse(**data)
 
 
 @app.get("/api/alerts")
