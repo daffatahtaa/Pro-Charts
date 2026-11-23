@@ -23,6 +23,7 @@ import {
   Layers,
 } from 'lucide-react';
 import { useChartStore } from '../store/useChartStore';
+import { estimateTradeMoney, formatAccountMoney } from '../utils/calcProfit';
 import {
   ActiveIndicator,
   ChartThemeSettings,
@@ -954,6 +955,7 @@ export const ChartOrderTicketModal: React.FC<ChartOrderTicketModalProps> = ({
     liveTick,
     candles,
     replay,
+    account,
     defaultLot,
     riskPct,
     executeOrder,
@@ -993,6 +995,38 @@ export const ChartOrderTicketModal: React.FC<ChartOrderTicketModalProps> = ({
   if (initialPrice === null) return null;
 
   const entryNum = orderMode === 'MARKET' ? currentPrice : parseFloat(entryStr) || initialPrice;
+  const ticketCurrency = replay.isActive ? 'USD' : account?.currency || 'USD';
+  const parsedSl = parseFloat(slStr);
+  const parsedTp = parseFloat(tpStr);
+  const effectiveLot = sizeMode === 'lot' ? parseFloat(lotStr) || defaultLot : 0;
+  const ticketSlEst =
+    sizeMode === 'lot' && Number.isFinite(parsedSl) && parsedSl > 0
+      ? estimateTradeMoney({
+          side,
+          entryPrice: entryNum,
+          targetPrice: parsedSl,
+          volume: effectiveLot,
+          tickSize: symbolInfo.tick_size,
+          tickValue: symbolInfo.tick_value,
+          tickValueProfit: symbolInfo.tick_value_profit,
+          tickValueLoss: symbolInfo.tick_value_loss,
+          contractSize: symbolInfo.contract_size,
+        })
+      : null;
+  const ticketTpEst =
+    sizeMode === 'lot' && Number.isFinite(parsedTp) && parsedTp > 0
+      ? estimateTradeMoney({
+          side,
+          entryPrice: entryNum,
+          targetPrice: parsedTp,
+          volume: effectiveLot,
+          tickSize: symbolInfo.tick_size,
+          tickValue: symbolInfo.tick_value,
+          tickValueProfit: symbolInfo.tick_value_profit,
+          tickValueLoss: symbolInfo.tick_value_loss,
+          contractSize: symbolInfo.contract_size,
+        })
+      : null;
   const pendingSubtype =
     side === 'BUY'
       ? entryNum < currentPrice
@@ -1195,7 +1229,14 @@ export const ChartOrderTicketModal: React.FC<ChartOrderTicketModalProps> = ({
           {/* Stop Loss */}
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="text-[11px] text-[#787b86]">Stop Loss (optional)</label>
+              <label className="text-[11px] text-[#787b86]">
+                Stop Loss (optional)
+                {ticketSlEst !== null && (
+                  <span className="ml-1.5 font-mono-num text-[#f23645]">
+                    {formatAccountMoney(ticketSlEst, ticketCurrency, { signed: true })}
+                  </span>
+                )}
+              </label>
               <div className="flex gap-1">
                 <button
                   type="button"
@@ -1226,7 +1267,14 @@ export const ChartOrderTicketModal: React.FC<ChartOrderTicketModalProps> = ({
           {/* Take Profit */}
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="text-[11px] text-[#787b86]">Take Profit (optional)</label>
+              <label className="text-[11px] text-[#787b86]">
+                Take Profit (optional)
+                {ticketTpEst !== null && (
+                  <span className="ml-1.5 font-mono-num text-[#089981]">
+                    {formatAccountMoney(ticketTpEst, ticketCurrency, { signed: true })}
+                  </span>
+                )}
+              </label>
               <div className="flex gap-1">
                 {[1, 2, 3].map((rr) => (
                   <button

@@ -25,6 +25,8 @@ from models import (
     BulkCloseRequest,
     BulkModifyRequest,
     BulkResultResponse,
+    CalcProfitRequest,
+    CalcProfitResponse,
     CandlesResponse,
     ChartNewsResponse,
     CustomServerRequest,
@@ -156,6 +158,19 @@ async def cancel_trade_order(ticket: int):
     return TradeResultResponse(**res)
 
 
+@app.post("/api/mt5/trade/calc-profit", response_model=CalcProfitResponse)
+async def calc_trade_profit(req: CalcProfitRequest):
+    res = await asyncio.to_thread(
+        mt5_service.estimate_profit,
+        req.symbol,
+        req.side,
+        req.volume,
+        req.entry_price,
+        req.target_price,
+    )
+    return CalcProfitResponse(**res)
+
+
 @app.get("/api/mt5/symbols", response_model=List[SymbolMetadata])
 async def get_mt5_symbols(
     search: str = Query(default="", description="Filter by symbol or description"),
@@ -173,6 +188,12 @@ async def get_mt5_symbols(
                 point=s["point"],
                 category=s["category"],
                 cached_bars=cached_counts.get(s["symbol"], 0),
+                tick_size=s.get("tick_size"),
+                tick_value=s.get("tick_value"),
+                tick_value_profit=s.get("tick_value_profit"),
+                tick_value_loss=s.get("tick_value_loss"),
+                contract_size=s.get("contract_size"),
+                currency_profit=s.get("currency_profit"),
             )
         )
     return result
@@ -221,6 +242,12 @@ async def get_mt5_candles(
         point=spec["point"],
         has_more=has_more,
         candles=candles,
+        tick_size=spec.get("tick_size"),
+        tick_value=spec.get("tick_value"),
+        tick_value_profit=spec.get("tick_value_profit"),
+        tick_value_loss=spec.get("tick_value_loss"),
+        contract_size=spec.get("contract_size"),
+        currency_profit=spec.get("currency_profit"),
     )
 
 
@@ -254,6 +281,12 @@ async def get_mt5_candles_window(
         point=spec["point"],
         has_more=has_more,
         candles=candles,
+        tick_size=spec.get("tick_size"),
+        tick_value=spec.get("tick_value"),
+        tick_value_profit=spec.get("tick_value_profit"),
+        tick_value_loss=spec.get("tick_value_loss"),
+        contract_size=spec.get("contract_size"),
+        currency_profit=spec.get("currency_profit"),
     )
 
 
@@ -283,6 +316,12 @@ async def get_mt5_candles_earliest(
         point=spec["point"],
         has_more=has_more,
         candles=candles,
+        tick_size=spec.get("tick_size"),
+        tick_value=spec.get("tick_value"),
+        tick_value_profit=spec.get("tick_value_profit"),
+        tick_value_loss=spec.get("tick_value_loss"),
+        contract_size=spec.get("contract_size"),
+        currency_profit=spec.get("currency_profit"),
     )
 
 

@@ -8,6 +8,7 @@ import {
   getHoveredOverlayId,
   convertOverlayPointsToPixel,
 } from './index';
+import { getMoneyPerLotPerPrice } from '../utils/calcProfit';
 
 export interface ResolvedRRPrices {
   entry: number;
@@ -397,20 +398,28 @@ function createRiskRewardTemplate(isLong: boolean): OverlayTemplate {
           const riskMoney =
             riskMode === 'money' ? riskVal : (accountSize * riskVal) / 100;
 
+          const { profitPerPrice, lossPerPrice } = getMoneyPerLotPerPrice({
+            tickSize: state.symbolInfo.tick_size,
+            tickValue: state.symbolInfo.tick_value,
+            tickValueProfit: state.symbolInfo.tick_value_profit,
+            tickValueLoss: state.symbolInfo.tick_value_loss,
+            contractSize: state.symbolInfo.contract_size,
+          });
+
           const rawQty =
             ext.rrFixedQty !== undefined && ext.rrFixedQty > 0
               ? ext.rrFixedQty
               : riskDist > 0
-              ? riskMoney / riskDist
+              ? riskMoney / (riskDist * lossPerPrice)
               : state.defaultLot || 0.01;
           const qtyFormatted =
             rawQty >= 10 ? fmtSmart(rawQty, 2) : fmtSmart(rawQty, 4);
 
           const actualLossMoney =
-            ext.rrFixedQty && ext.rrFixedQty > 0 ? rawQty * riskDist : riskMoney;
+            ext.rrFixedQty && ext.rrFixedQty > 0 ? rawQty * riskDist * lossPerPrice : riskMoney;
           const actualProfitMoney =
             ext.rrFixedQty && ext.rrFixedQty > 0
-              ? rawQty * rewardDist
+              ? rawQty * rewardDist * profitPerPrice
               : riskMoney * rrNum;
 
           const targetAmount = accountSize + actualProfitMoney;
@@ -429,7 +438,8 @@ function createRiskRewardTemplate(isLong: boolean): OverlayTemplate {
           const openPriceDiff = isLong
             ? currentPrice - resolved.entry
             : resolved.entry - currentPrice;
-          const openPnl = openPriceDiff * rawQty;
+          const openPnl =
+            openPriceDiff * rawQty * (openPriceDiff >= 0 ? profitPerPrice : lossPerPrice);
           const isOpenPositive = openPnl >= 0;
 
           const midX = xLeft + width / 2;

@@ -577,35 +577,207 @@ class MT5Service:
                 "error": self.last_error_msg,
             }
 
+    def _mock_valuation_spec(
+        self, symbol: str, digits: int, point: float, category: str, base_price: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """Realistic per-asset contract/tick valuation specs for mock/offline mode."""
+        s_upper = (symbol or "").upper()
+        cat_l = (category or "").lower()
+        tick_size = float(point) if point and point > 0 else (10.0 ** (-digits))
+        if cat_l == "metals" or any(k in s_upper for k in ("XAU", "GOLD")):
+            if "XAG" in s_upper or "SILVER" in s_upper:
+                contract_size = 5000.0
+            else:
+                contract_size = 100.0
+            tick_value = round(tick_size * contract_size, 8)
+            currency_profit = "USD"
+        elif cat_l in ("indices", "crypto") or any(
+            k in s_upper for k in ("US30", "NAS100", "SPX", "BTC", "ETH")
+        ):
+            contract_size = 1.0
+            tick_value = round(tick_size * contract_size, 8)
+            currency_profit = "USD"
+        else:
+            # Standard Forex 100,000 units per lot
+            contract_size = 100000.0
+            if "JPY" in s_upper:
+                ref = float(base_price) if base_price and base_price > 0 else 154.0
+                tick_value = round((tick_size * contract_size) / ref, 6)
+                currency_profit = "JPY"
+            elif s_upper.startswith("USD") and len(s_upper) >= 6:
+                ref = float(base_price) if base_price and base_price > 0 else 1.0
+                tick_value = round((tick_size * contract_size) / max(0.01, ref), 6)
+                currency_profit = s_upper[3:6]
+            else:
+                tick_value = round(tick_size * contract_size, 6)
+                currency_profit = "USD"
+        return {
+            "tick_size": tick_size,
+            "tick_value": tick_value,
+            "tick_value_profit": tick_value,
+            "tick_value_loss": tick_value,
+            "contract_size": contract_size,
+            "currency_profit": currency_profit,
+        }
+
+    def _extract_live_valuation_spec(self, info: Any) -> Dict[str, Any]:
+        """
+        Extract MT5 symbol tick/contract specs and calibrate directional tick values
+        directly against `mt5.order_calc_profit` so Cent (USC), 3-digit Gold, FX crosses,
+        Indices, and Crypto match MT5 Terminal to the penny.
+        """
+        point = float(getattr(info, "point", 0.0) or 0.0)
+        tick_size = float(getattr(info, "trade_tick_size", 0.0) or 0.0) or point or 0.00001
+        raw_tv = float(getattr(info, "trade_tick_value", 0.0) or 0.0)
+        tv_profit = float(getattr(info, "trade_tick_value_profit", 0.0) or 0.0) or raw_tv
+        tv_loss = float(getattr(info, "trade_tick_value_loss", 0.0) or 0.0) or raw_tv
+        contract_size = float(getattr(info, "trade_contract_size", 0.0) or 0.0)
+        currency_profit = str(getattr(info, "currency_profit", "") or "")
+
+        # Calibrate tick_value_profit / tick_value_loss using MT5's native C++ order_calc_profit
+        # so broker-specific Cent (USC) or CFD scaling is 100% faithful.
+        try:
+            ref_price = float(getattr(info, "bid", 0.0) or getattr(info, "ask", 0.0) or getattr(info, "last", 0.0) or 0.0)
+            if ref_price <= 0:
+                tk = mt5.symbol_info_tick(info.name)
+                if tk is not None:
+                    ref_price = float(getattr(tk, "bid", 0.0) or getattr(tk, "ask", 0.0) or 0.0)
+            if ref_price > 0 and tick_size > 0 and hasattr(mt5, "order_calc_profit"):
+                step = max(tick_size * 1000.0, ref_price * 0.01)
+                p_up = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, info.name, 1.0, ref_price, ref_price + step)
+                if p_up is not None and p_up > 0:
+                    tv_profit = (float(p_up) / step) * tick_size
+                dn_target = max(tick_size, ref_price - step)
+                dn_step = ref_price - dn_target
+                if dn_step > 0:
+                    p_dn = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, info.name, 1.0, ref_price, dn_target)
+                    if p_dn is not None and p_dn < 0:
+                        tv_loss = (abs(float(p_dn)) / dn_step) * tick_size
+                if tv_profit > 0 and tv_loss <= 0:
+                    tv_loss = tv_profit
+                elif tv_loss > 0 and tv_profit <= 0:
+                    tv_profit = tv_loss
+                if tv_profit > 0:
+                    raw_tv = tv_profit
+        except Exception as exc:
+            logger.debug("order_calc_profit calibration skipped for %s: %s", getattr(info, "name", "?"), exc)
+
+        return {
+            "tick_size": tick_size,
+            "tick_value": raw_tv if raw_tv > 0 else None,
+            "tick_value_profit": tv_profit if tv_profit > 0 else None,
+            "tick_value_loss": tv_loss if tv_loss > 0 else None,
+            "contract_size": contract_size if contract_size > 0 else None,
+            "currency_profit": currency_profit or None,
+        }
+
+    @staticmethod
+    def _estimate_profit_from_spec(
+        side_or_type: str,
+        volume: float,
+        entry_price: float,
+        target_price: float,
+        spec: Dict[str, Any],
+    ) -> Optional[float]:
+        if volume <= 0 or entry_price <= 0 or target_price <= 0:
+            return None
+        is_buy = str(side_or_type or "").upper().startswith("BUY")
+        diff = (target_price - entry_price) if is_buy else (entry_price - target_price)
+        tick_size = float(spec.get("tick_size") or 0.0)
+        tv = float(
+            (spec.get("tick_value_profit") if diff >= 0 else spec.get("tick_value_loss"))
+            or spec.get("tick_value")
+            or 0.0
+        )
+        if tick_size > 0 and tv > 0:
+            return round((diff / tick_size) * tv * float(volume), 2)
+        contract_size = float(spec.get("contract_size") or 0.0)
+        if contract_size > 0:
+            return round(diff * contract_size * float(volume), 2)
+        return None
+
+    def _calc_profit_locked(
+        self,
+        side_or_type: str,
+        symbol: str,
+        volume: float,
+        entry_price: float,
+        target_price: float,
+        spec: Dict[str, Any],
+    ) -> Optional[float]:
+        """Compute exact MT5 profit via `mt5.order_calc_profit` with spec-based fallback (caller holds self._lock)."""
+        if volume <= 0 or entry_price <= 0 or target_price <= 0:
+            return None
+        is_buy = str(side_or_type or "").upper().startswith("BUY")
+        if self.connected and MT5_IMPORTED and mt5 is not None and hasattr(mt5, "order_calc_profit"):
+            try:
+                action = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
+                val = mt5.order_calc_profit(action, symbol, float(volume), float(entry_price), float(target_price))
+                if val is not None and math.isfinite(float(val)):
+                    return round(float(val), 2)
+            except Exception as exc:
+                logger.debug("mt5.order_calc_profit failed for %s: %s", symbol, exc)
+        return self._estimate_profit_from_spec(side_or_type, volume, entry_price, target_price, spec)
+
+    def estimate_profit(
+        self,
+        symbol: str,
+        side_or_type: str,
+        volume: float,
+        entry_price: float,
+        target_price: float,
+    ) -> Dict[str, Any]:
+        resolved_sym = self.resolve_broker_symbol(symbol)
+        spec = self.get_symbol_spec(resolved_sym)
+        currency = "USD"
+        with self._lock:
+            if self.connected and MT5_IMPORTED and mt5 is not None:
+                acc = mt5.account_info()
+                if acc is not None and getattr(acc, "currency", None):
+                    currency = str(acc.currency)
+            profit = self._calc_profit_locked(
+                side_or_type, resolved_sym, volume, entry_price, target_price, spec
+            )
+        return {"symbol": resolved_sym, "profit": profit, "currency": currency}
+
     def get_symbol_spec(self, symbol: str) -> Dict[str, Any]:
         with self._lock:
             if self.connected and MT5_IMPORTED and mt5 is not None:
                 mt5.symbol_select(symbol, True)
                 info = mt5.symbol_info(symbol)
                 if info is not None:
+                    val_spec = self._extract_live_valuation_spec(info)
                     return {
                         "symbol": info.name,
                         "description": info.description or info.name,
                         "digits": int(info.digits),
                         "point": float(info.point),
                         "category": classify_category(info.name, getattr(info, "path", "")),
+                        **val_spec,
                     }
             # Fallback mock spec
             mock = MOCK_SYMBOL_MAP.get(symbol.upper())
             if mock:
+                val_spec = self._mock_valuation_spec(
+                    mock["symbol"], mock["digits"], mock["point"], mock["category"], mock.get("base_price")
+                )
                 return {
                     "symbol": mock["symbol"],
                     "description": mock["description"],
                     "digits": mock["digits"],
                     "point": mock["point"],
                     "category": mock["category"],
+                    **val_spec,
                 }
+            cat = classify_category(symbol)
+            val_spec = self._mock_valuation_spec(symbol, 5, 0.00001, cat)
             return {
                 "symbol": symbol,
                 "description": symbol,
                 "digits": 5,
                 "point": 0.00001,
-                "category": classify_category(symbol),
+                "category": cat,
+                **val_spec,
             }
 
     def get_symbols(self, search: str = "", category: str = "") -> List[Dict[str, Any]]:
@@ -632,6 +804,12 @@ class MT5Service:
                             "digits": int(s.digits),
                             "point": float(s.point),
                             "category": cat,
+                            "tick_size": float(getattr(s, "trade_tick_size", 0.0) or 0.0) or float(s.point),
+                            "tick_value": float(getattr(s, "trade_tick_value", 0.0) or 0.0) or None,
+                            "tick_value_profit": float(getattr(s, "trade_tick_value_profit", 0.0) or 0.0) or None,
+                            "tick_value_loss": float(getattr(s, "trade_tick_value_loss", 0.0) or 0.0) or None,
+                            "contract_size": float(getattr(s, "trade_contract_size", 0.0) or 0.0) or None,
+                            "currency_profit": str(getattr(s, "currency_profit", "") or "") or None,
                         }
                         if getattr(s, "visible", False):
                             visible_list.append(item)
@@ -646,6 +824,9 @@ class MT5Service:
                 continue
             if search_u and search_u not in m["symbol"].upper() and search_u not in m["description"].upper():
                 continue
+            val_spec = self._mock_valuation_spec(
+                m["symbol"], m["digits"], m["point"], m["category"], m.get("base_price")
+            )
             results.append(
                 {
                     "symbol": m["symbol"],
@@ -653,6 +834,7 @@ class MT5Service:
                     "digits": m["digits"],
                     "point": m["point"],
                     "category": m["category"],
+                    **val_spec,
                 }
             )
         return results
@@ -1331,13 +1513,28 @@ class MT5Service:
         if sl_distance <= 0 or equity <= 0 or risk_pct <= 0:
             return float(getattr(info, "volume_min", 0.01))
         risk_money = equity * (risk_pct / 100.0)
-        tick_val = float(getattr(info, "trade_tick_value", 0.0))
-        tick_size = float(getattr(info, "trade_tick_size", 0.0))
-        contract_size = float(getattr(info, "trade_contract_size", 100000.0))
-        if tick_val > 0 and tick_size > 0:
-            loss_per_lot = (sl_distance / tick_size) * tick_val
-        else:
-            loss_per_lot = sl_distance * contract_size
+        loss_per_lot = 0.0
+        # Prefer exact MT5 order_calc_profit for 1.0 lot risk sizing when connected
+        try:
+            if self.connected and MT5_IMPORTED and mt5 is not None and hasattr(mt5, "order_calc_profit"):
+                action = mt5.ORDER_TYPE_BUY if sl < entry_price else mt5.ORDER_TYPE_SELL
+                calc_loss = mt5.order_calc_profit(action, info.name, 1.0, float(entry_price), float(sl))
+                if calc_loss is not None and abs(float(calc_loss)) > 0:
+                    loss_per_lot = abs(float(calc_loss))
+        except Exception:
+            pass
+        if loss_per_lot <= 0:
+            tick_val = float(
+                getattr(info, "trade_tick_value_loss", 0.0)
+                or getattr(info, "trade_tick_value", 0.0)
+                or 0.0
+            )
+            tick_size = float(getattr(info, "trade_tick_size", 0.0) or 0.0)
+            contract_size = float(getattr(info, "trade_contract_size", 100000.0) or 100000.0)
+            if tick_val > 0 and tick_size > 0:
+                loss_per_lot = (sl_distance / tick_size) * tick_val
+            else:
+                loss_per_lot = sl_distance * contract_size
         if loss_per_lot <= 0:
             return float(getattr(info, "volume_min", 0.01))
         raw_vol = risk_money / loss_per_lot
@@ -1380,55 +1577,107 @@ class MT5Service:
                     "trade_allowed": trade_allowed,
                 }
 
-                sym_digits_cache: Dict[str, int] = {}
+                sym_spec_cache: Dict[str, Dict[str, Any]] = {}
 
-                def _resolve_live_digits(sym: str) -> int:
-                    if sym not in sym_digits_cache:
+                def _resolve_live_spec(sym: str) -> Dict[str, Any]:
+                    if sym not in sym_spec_cache:
+                        mt5.symbol_select(sym, True)
                         s_info = mt5.symbol_info(sym)
-                        if s_info is not None and getattr(s_info, "digits", None) is not None:
-                            sym_digits_cache[sym] = int(s_info.digits)
+                        if s_info is not None:
+                            val_spec = self._extract_live_valuation_spec(s_info)
+                            sym_spec_cache[sym] = {
+                                "digits": int(s_info.digits),
+                                "point": float(s_info.point),
+                                **val_spec,
+                            }
                         else:
-                            sym_digits_cache[sym] = int(self.get_symbol_spec(sym)["digits"])
-                    return sym_digits_cache[sym]
+                            sym_spec_cache[sym] = self.get_symbol_spec(sym)
+                    return sym_spec_cache[sym]
 
                 raw_pos = mt5.positions_get() or []
                 positions: List[Dict[str, Any]] = []
                 for p in raw_pos:
                     side = "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL"
+                    s_spec = _resolve_live_spec(p.symbol)
+                    sl_val = float(p.sl)
+                    tp_val = float(p.tp)
+                    open_p = float(p.price_open)
+                    vol = float(p.volume)
+                    sl_profit = (
+                        self._calc_profit_locked(side, p.symbol, vol, open_p, sl_val, s_spec)
+                        if sl_val > 0
+                        else None
+                    )
+                    tp_profit = (
+                        self._calc_profit_locked(side, p.symbol, vol, open_p, tp_val, s_spec)
+                        if tp_val > 0
+                        else None
+                    )
                     positions.append(
                         {
                             "ticket": int(p.ticket),
                             "symbol": p.symbol,
                             "side": side,
-                            "volume": float(p.volume),
-                            "open_price": float(p.price_open),
+                            "volume": vol,
+                            "open_price": open_p,
                             "current_price": float(p.price_current),
-                            "sl": float(p.sl),
-                            "tp": float(p.tp),
+                            "sl": sl_val,
+                            "tp": tp_val,
                             "profit": round(float(p.profit), 2),
                             "swap": round(float(p.swap), 2),
+                            "commission": round(float(getattr(p, "commission", 0.0) or 0.0), 2),
                             "open_time_ms": int(p.time_msc) if getattr(p, "time_msc", 0) else int(p.time) * 1000,
                             "comment": p.comment or "",
-                            "digits": _resolve_live_digits(p.symbol),
+                            "digits": int(s_spec["digits"]),
+                            "tick_size": s_spec.get("tick_size"),
+                            "tick_value": s_spec.get("tick_value"),
+                            "tick_value_profit": s_spec.get("tick_value_profit"),
+                            "tick_value_loss": s_spec.get("tick_value_loss"),
+                            "contract_size": s_spec.get("contract_size"),
+                            "sl_profit": sl_profit,
+                            "tp_profit": tp_profit,
                         }
                     )
 
                 raw_orders = mt5.orders_get() or []
                 orders: List[Dict[str, Any]] = []
                 for o in raw_orders:
+                    order_type_str = self._order_type_to_str(o.type)
+                    s_spec = _resolve_live_spec(o.symbol)
+                    sl_val = float(o.sl)
+                    tp_val = float(o.tp)
+                    open_p = float(o.price_open)
+                    vol = float(o.volume_current)
+                    sl_profit = (
+                        self._calc_profit_locked(order_type_str, o.symbol, vol, open_p, sl_val, s_spec)
+                        if sl_val > 0
+                        else None
+                    )
+                    tp_profit = (
+                        self._calc_profit_locked(order_type_str, o.symbol, vol, open_p, tp_val, s_spec)
+                        if tp_val > 0
+                        else None
+                    )
                     orders.append(
                         {
                             "ticket": int(o.ticket),
                             "symbol": o.symbol,
-                            "order_type": self._order_type_to_str(o.type),
-                            "volume": float(o.volume_current),
-                            "price_open": float(o.price_open),
+                            "order_type": order_type_str,
+                            "volume": vol,
+                            "price_open": open_p,
                             "current_price": float(o.price_current),
-                            "sl": float(o.sl),
-                            "tp": float(o.tp),
+                            "sl": sl_val,
+                            "tp": tp_val,
                             "setup_time_ms": int(o.time_setup_msc) if getattr(o, "time_setup_msc", 0) else int(o.time_setup) * 1000,
                             "comment": o.comment or "",
-                            "digits": _resolve_live_digits(o.symbol),
+                            "digits": int(s_spec["digits"]),
+                            "tick_size": s_spec.get("tick_size"),
+                            "tick_value": s_spec.get("tick_value"),
+                            "tick_value_profit": s_spec.get("tick_value_profit"),
+                            "tick_value_loss": s_spec.get("tick_value_loss"),
+                            "contract_size": s_spec.get("contract_size"),
+                            "sl_profit": sl_profit,
+                            "tp_profit": tp_profit,
                         }
                     )
 
@@ -1438,16 +1687,63 @@ class MT5Service:
         total_pnl = 0.0
         mock_pos_out: List[Dict[str, Any]] = []
         for mp in self._mock_positions:
+            spec = self.get_symbol_spec(mp["symbol"])
             snap = self._generate_mock_live_tick(mp["symbol"], "15m", 900)
             cur = snap["bid"] if mp["side"] == "BUY" else snap["ask"]
-            diff = (cur - mp["open_price"]) if mp["side"] == "BUY" else (mp["open_price"] - cur)
-            pnl = round(diff * mp["volume"] * 100.0, 2)
-            total_pnl += pnl
+            pnl = self._estimate_profit_from_spec(
+                mp["side"], mp["volume"], mp["open_price"], cur, spec
+            )
+            pnl_val = float(pnl) if pnl is not None else 0.0
+            total_pnl += pnl_val
             mp["current_price"] = cur
-            mp["profit"] = pnl
+            mp["profit"] = pnl_val
             out_item = dict(mp)
-            out_item["digits"] = int(self.get_symbol_spec(mp["symbol"])["digits"])
+            sl_val = float(mp.get("sl") or 0.0)
+            tp_val = float(mp.get("tp") or 0.0)
+            out_item["digits"] = int(spec["digits"])
+            out_item["tick_size"] = spec.get("tick_size")
+            out_item["tick_value"] = spec.get("tick_value")
+            out_item["tick_value_profit"] = spec.get("tick_value_profit")
+            out_item["tick_value_loss"] = spec.get("tick_value_loss")
+            out_item["contract_size"] = spec.get("contract_size")
+            out_item["commission"] = float(mp.get("commission") or 0.0)
+            out_item["sl_profit"] = (
+                self._estimate_profit_from_spec(mp["side"], mp["volume"], mp["open_price"], sl_val, spec)
+                if sl_val > 0
+                else None
+            )
+            out_item["tp_profit"] = (
+                self._estimate_profit_from_spec(mp["side"], mp["volume"], mp["open_price"], tp_val, spec)
+                if tp_val > 0
+                else None
+            )
             mock_pos_out.append(out_item)
+
+        mock_ord_out: List[Dict[str, Any]] = []
+        for mo in self._mock_orders:
+            spec = self.get_symbol_spec(mo["symbol"])
+            out_ord = dict(mo)
+            sl_val = float(mo.get("sl") or 0.0)
+            tp_val = float(mo.get("tp") or 0.0)
+            open_p = float(mo.get("price_open") or 0.0)
+            vol = float(mo.get("volume") or 0.0)
+            out_ord["digits"] = int(spec["digits"])
+            out_ord["tick_size"] = spec.get("tick_size")
+            out_ord["tick_value"] = spec.get("tick_value")
+            out_ord["tick_value_profit"] = spec.get("tick_value_profit")
+            out_ord["tick_value_loss"] = spec.get("tick_value_loss")
+            out_ord["contract_size"] = spec.get("contract_size")
+            out_ord["sl_profit"] = (
+                self._estimate_profit_from_spec(mo["order_type"], vol, open_p, sl_val, spec)
+                if sl_val > 0
+                else None
+            )
+            out_ord["tp_profit"] = (
+                self._estimate_profit_from_spec(mo["order_type"], vol, open_p, tp_val, spec)
+                if tp_val > 0
+                else None
+            )
+            mock_ord_out.append(out_ord)
 
         return {
             "account": {
@@ -1463,7 +1759,7 @@ class MT5Service:
                 "trade_allowed": True,
             },
             "positions": mock_pos_out,
-            "orders": [dict(mo) for mo in self._mock_orders],
+            "orders": mock_ord_out,
         }
 
     def place_order(self, req: PlaceOrderRequest) -> Dict[str, Any]:

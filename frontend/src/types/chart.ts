@@ -319,6 +319,12 @@ export interface SymbolInfo {
   point: number;
   category: string;
   cached_bars?: number;
+  tick_size?: number | null;
+  tick_value?: number | null;
+  tick_value_profit?: number | null;
+  tick_value_loss?: number | null;
+  contract_size?: number | null;
+  currency_profit?: string | null;
 }
 
 export interface MT5Status {
@@ -363,9 +369,17 @@ export interface PositionItem {
   tp: number;
   profit: number;
   swap: number;
+  commission?: number;
   open_time_ms: number;
   comment: string;
   digits?: number;
+  tick_size?: number | null;
+  tick_value?: number | null;
+  tick_value_profit?: number | null;
+  tick_value_loss?: number | null;
+  contract_size?: number | null;
+  sl_profit?: number | null;
+  tp_profit?: number | null;
 }
 
 export interface PendingOrderItem {
@@ -380,6 +394,13 @@ export interface PendingOrderItem {
   setup_time_ms: number;
   comment: string;
   digits?: number;
+  tick_size?: number | null;
+  tick_value?: number | null;
+  tick_value_profit?: number | null;
+  tick_value_loss?: number | null;
+  contract_size?: number | null;
+  sl_profit?: number | null;
+  tp_profit?: number | null;
 }
 
 export interface TradeStatePayload {

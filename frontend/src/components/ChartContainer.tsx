@@ -29,6 +29,7 @@ import {
   ActivePositionEditor,
   InteractiveTradeLayer,
 } from './InteractiveTradeLayer';
+import { estimateTradeMoney, formatAccountMoney } from '../utils/calcProfit';
 import { ChartNewsOverlay } from './ChartNewsOverlay';
 import {
   ChartContextMenu,
@@ -309,6 +310,7 @@ export const ChartContainer: React.FC = () => {
     activeIndicators,
     logScale,
     replay,
+    account,
     paperAccount,
     positions,
     orders,
@@ -1851,6 +1853,12 @@ export const ChartContainer: React.FC = () => {
           digits: res.digits,
           point: res.point,
           category: useChartStore.getState().symbolInfo.category,
+          tick_size: res.tick_size ?? null,
+          tick_value: res.tick_value ?? null,
+          tick_value_profit: res.tick_value_profit ?? null,
+          tick_value_loss: res.tick_value_loss ?? null,
+          contract_size: res.contract_size ?? null,
+          currency_profit: res.currency_profit ?? null,
         });
         chart.setPriceVolumePrecision(res.digits, 0);
         const displayCandles =
@@ -3140,6 +3148,10 @@ export const ChartContainer: React.FC = () => {
     posEditor?.mode === 'live' && !posEditor.isPending
       ? positions.find((p) => p.ticket === posEditor.id)
       : null;
+  const liveEditorOrder =
+    posEditor?.mode === 'live' && posEditor.isPending
+      ? orders.find((o) => o.ticket === posEditor.id)
+      : null;
   const paperEditorPos =
     posEditor?.mode === 'paper'
       ? paperAccount.trades.find((t) => t.id === posEditor.id)
@@ -3149,6 +3161,8 @@ export const ChartContainer: React.FC = () => {
     : paperEditorPos
     ? paperEditorPos.pnl_money
     : posEditor?.profit ?? 0;
+  const activeEditorCurrency =
+    posEditor?.mode === 'paper' ? 'USD' : account?.currency || 'USD';
 
   const activeEntryRef =
     posEditor?.isPending && parseFloat(entryDraft) > 0
@@ -3163,6 +3177,40 @@ export const ChartContainer: React.FC = () => {
   const tpPipsDist =
     posEditor && Number.isFinite(tpNum) && tpNum > 0
       ? ((posEditor.side === 'BUY' ? tpNum - activeEntryRef : activeEntryRef - tpNum) / pipSize).toFixed(1)
+      : null;
+  const editorValSpec = {
+    tickSize: liveEditorPos?.tick_size ?? liveEditorOrder?.tick_size ?? symbolInfo.tick_size,
+    tickValue: liveEditorPos?.tick_value ?? liveEditorOrder?.tick_value ?? symbolInfo.tick_value,
+    tickValueProfit:
+      liveEditorPos?.tick_value_profit ??
+      liveEditorOrder?.tick_value_profit ??
+      symbolInfo.tick_value_profit,
+    tickValueLoss:
+      liveEditorPos?.tick_value_loss ??
+      liveEditorOrder?.tick_value_loss ??
+      symbolInfo.tick_value_loss,
+    contractSize:
+      liveEditorPos?.contract_size ?? liveEditorOrder?.contract_size ?? symbolInfo.contract_size,
+  };
+  const slMoneyEst =
+    posEditor && Number.isFinite(slNum) && slNum > 0
+      ? estimateTradeMoney({
+          side: posEditor.side,
+          entryPrice: activeEntryRef,
+          targetPrice: slNum,
+          volume: posEditor.volume,
+          ...editorValSpec,
+        })
+      : null;
+  const tpMoneyEst =
+    posEditor && Number.isFinite(tpNum) && tpNum > 0
+      ? estimateTradeMoney({
+          side: posEditor.side,
+          entryPrice: activeEntryRef,
+          targetPrice: tpNum,
+          volume: posEditor.volume,
+          ...editorValSpec,
+        })
       : null;
 
   return (
@@ -3912,7 +3960,7 @@ export const ChartContainer: React.FC = () => {
                     activeEditorProfit >= 0 ? 'text-[#089981]' : 'text-[#f23645]'
                   }`}
                 >
-                  {activeEditorProfit >= 0 ? '+' : '-'}${Math.abs(activeEditorProfit).toFixed(2)}
+                  {formatAccountMoney(activeEditorProfit, activeEditorCurrency, { signed: true })}
                 </div>
               </div>
             )}
@@ -3923,7 +3971,10 @@ export const ChartContainer: React.FC = () => {
                 <span className="text-[11px] font-medium text-[#f23645]">Stop Loss (SL)</span>
                 {slPipsDist !== null && (
                   <span className="text-[10px] font-mono-num text-[#787b86]">
-                    {Number(slPipsDist) >= 0 ? `+${slPipsDist}` : slPipsDist} pips
+                    {Number(slPipsDist) >= 0 ? `+${slPipsDist}` : slPipsDist}p
+                    {slMoneyEst !== null
+                      ? ` (${formatAccountMoney(slMoneyEst, activeEditorCurrency, { signed: true })})`
+                      : ''}
                   </span>
                 )}
               </div>
@@ -3983,7 +4034,10 @@ export const ChartContainer: React.FC = () => {
                 <span className="text-[11px] font-medium text-[#089981]">Take Profit (TP)</span>
                 {tpPipsDist !== null && (
                   <span className="text-[10px] font-mono-num text-[#787b86]">
-                    {Number(tpPipsDist) >= 0 ? `+${tpPipsDist}` : tpPipsDist} pips
+                    {Number(tpPipsDist) >= 0 ? `+${tpPipsDist}` : tpPipsDist}p
+                    {tpMoneyEst !== null
+                      ? ` (${formatAccountMoney(tpMoneyEst, activeEditorCurrency, { signed: true })})`
+                      : ''}
                   </span>
                 )}
               </div>

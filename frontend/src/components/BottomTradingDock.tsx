@@ -19,6 +19,7 @@ import {
   resolveSymbolDigits,
   resolveSymbolPoint,
 } from '../utils/formatPrice';
+import { formatAccountMoney } from '../utils/calcProfit';
 
 export const BottomTradingDock: React.FC = () => {
   const {
@@ -65,11 +66,7 @@ export const BottomTradingDock: React.FC = () => {
   const paperPending = paperAccount.trades.filter((t) => t.status === 'PENDING');
 
   const currency = isPaper ? 'USD' : account?.currency || 'USD';
-  const fmtMoney = (v: number) =>
-    `${v < 0 ? '-' : ''}${currency === 'USD' ? '$' : ''}${Math.abs(v).toLocaleString('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })}`;
+  const fmtMoney = (v: number) => formatAccountMoney(v, currency);
 
   const handleBreakeven = async (pos: PositionItem) => {
     setBusyTicket(pos.ticket);
@@ -379,8 +376,7 @@ export const BottomTradingDock: React.FC = () => {
                 floatingPnl >= 0 ? 'text-[#089981]' : 'text-[#f23645]'
               }`}
             >
-              {floatingPnl >= 0 ? '+' : ''}
-              {fmtMoney(floatingPnl)}
+              {formatAccountMoney(floatingPnl, currency, { signed: true })}
             </span>
           </div>
         </div>
@@ -608,7 +604,7 @@ export const BottomTradingDock: React.FC = () => {
                     <th className="py-1.5 px-2 font-medium text-right">SL</th>
                     <th className="py-1.5 px-2 font-medium text-right">TP</th>
                     <th className="py-1.5 px-2 font-medium text-right">Current</th>
-                    <th className="py-1.5 px-2 font-medium text-right">Profit ($)</th>
+                    <th className="py-1.5 px-2 font-medium text-right">Profit ({currency})</th>
                     <th className="py-1.5 px-3 font-medium text-right">Actions</th>
                   </tr>
                 </thead>
@@ -657,10 +653,24 @@ export const BottomTradingDock: React.FC = () => {
                         <td className="py-1.5 px-2 text-right text-[#d1d4dc]">
                           {formatTradePrice(pos.open_price, getDigitsFor(pos.symbol, pos.digits))}
                         </td>
-                        <td className="py-1.5 px-2 text-right text-[#f23645]">
+                        <td
+                          className="py-1.5 px-2 text-right text-[#f23645]"
+                          title={
+                            typeof pos.sl_profit === 'number'
+                              ? `Projected SL P/L: ${formatAccountMoney(pos.sl_profit, currency, { signed: true })}`
+                              : undefined
+                          }
+                        >
                           {formatTradePrice(pos.sl, getDigitsFor(pos.symbol, pos.digits))}
                         </td>
-                        <td className="py-1.5 px-2 text-right text-[#089981]">
+                        <td
+                          className="py-1.5 px-2 text-right text-[#089981]"
+                          title={
+                            typeof pos.tp_profit === 'number'
+                              ? `Projected TP P/L: ${formatAccountMoney(pos.tp_profit, currency, { signed: true })}`
+                              : undefined
+                          }
+                        >
                           {formatTradePrice(pos.tp, getDigitsFor(pos.symbol, pos.digits))}
                         </td>
                         <td className="py-1.5 px-2 text-right text-[#d1d4dc]">
@@ -670,8 +680,13 @@ export const BottomTradingDock: React.FC = () => {
                           className={`py-1.5 px-2 text-right font-semibold ${
                             isProfit ? 'text-[#089981]' : 'text-[#f23645]'
                           }`}
+                          title={
+                            pos.swap || pos.commission
+                              ? `Profit: ${formatAccountMoney(pos.profit, currency, { signed: true })} | Swap: ${formatAccountMoney(pos.swap, currency, { signed: true })}${pos.commission ? ` | Comm: ${formatAccountMoney(pos.commission, currency, { signed: true })}` : ''}`
+                              : undefined
+                          }
                         >
-                          {formatSignedMoney(pos.profit)}
+                          {formatAccountMoney(pos.profit, currency, { signed: true })}
                         </td>
                         <td
                           className="py-1.5 px-3 text-right"
@@ -757,10 +772,24 @@ export const BottomTradingDock: React.FC = () => {
                       <td className="py-1.5 px-2 text-right text-[#d1d4dc]">
                         {formatTradePrice(ord.price_open, getDigitsFor(ord.symbol, ord.digits))}
                       </td>
-                      <td className="py-1.5 px-2 text-right text-[#f23645]">
+                      <td
+                        className="py-1.5 px-2 text-right text-[#f23645]"
+                        title={
+                          typeof ord.sl_profit === 'number'
+                            ? `Projected SL P/L: ${formatAccountMoney(ord.sl_profit, currency, { signed: true })}`
+                            : undefined
+                        }
+                      >
                         {formatTradePrice(ord.sl, getDigitsFor(ord.symbol, ord.digits))}
                       </td>
-                      <td className="py-1.5 px-2 text-right text-[#089981]">
+                      <td
+                        className="py-1.5 px-2 text-right text-[#089981]"
+                        title={
+                          typeof ord.tp_profit === 'number'
+                            ? `Projected TP P/L: ${formatAccountMoney(ord.tp_profit, currency, { signed: true })}`
+                            : undefined
+                        }
+                      >
                         {formatTradePrice(ord.tp, getDigitsFor(ord.symbol, ord.digits))}
                       </td>
                       <td className="py-1.5 px-2 text-right text-[#787b86]">

@@ -17,6 +17,7 @@ import {
 import { api } from '../services/api';
 import { useChartStore } from '../store/useChartStore';
 import { JournalTrade, MyfxbookReportData } from '../types/chart';
+import { formatAccountMoney } from '../utils/calcProfit';
 
 const SETUP_TAGS = ['OB', 'FVG', 'OB + FVG', 'BOS', 'CHoCH', 'Liquidity Sweep', 'Breakout', 'Trend', 'News'];
 const MISTAKE_TAGS = ['Followed Plan ✅', 'FOMO ⚠️', 'Early Exit', 'Revenge Trade', 'Moved SL', 'Overleveraged'];
@@ -33,6 +34,7 @@ function fmtHold(sec: number): string {
 
 interface JournalTradeRowProps {
   trade: JournalTrade;
+  currency: string;
   isExpanded: boolean;
   onToggleExpand: (tradeKey: string) => void;
   onUpdateMeta: (
@@ -49,7 +51,7 @@ interface JournalTradeRowProps {
 }
 
 const JournalTradeRow: React.FC<JournalTradeRowProps> = React.memo(
-  ({ trade: t, isExpanded, onToggleExpand, onUpdateMeta, onViewOnChart }) => {
+  ({ trade: t, currency, isExpanded, onToggleExpand, onUpdateMeta, onViewOnChart }) => {
     const [localNote, setLocalNote] = useState(t.notes);
 
     useEffect(() => {
@@ -85,10 +87,10 @@ const JournalTradeRow: React.FC<JournalTradeRowProps> = React.memo(
           </td>
           <td
             className="py-2 px-2 text-right font-mono-num"
-            title={`Gross: $${t.gross_profit} | Comm: $${t.commission} | Swap: $${t.swap}`}
+            title={`Gross: ${formatAccountMoney(t.gross_profit, currency, { signed: true })} | Comm: ${formatAccountMoney(t.commission, currency, { signed: true })} | Swap: ${formatAccountMoney(t.swap, currency, { signed: true })}`}
           >
             <div className={isWin ? 'text-[#089981] font-semibold' : 'text-[#f23645] font-semibold'}>
-              {isWin ? '+' : '-'}${Math.abs(t.net_pnl).toFixed(2)}
+              {formatAccountMoney(t.net_pnl, currency, { signed: true })}
             </div>
             <div className="text-[10px] text-[#787b86]">
               {t.pips >= 0 ? '+' : ''}
@@ -198,6 +200,7 @@ export const TradingAnalyticsModal: React.FC = () => {
   const setAnalyticsHubTab = useChartStore((s) => s.setAnalyticsHubTab);
   const setSymbol = useChartStore((s) => s.setSymbol);
   const showToast = useChartStore((s) => s.showToast);
+  const accountCurrency = useChartStore((s) => s.account?.currency);
 
   const [source, setSource] = useState<'mt5' | 'paper'>('mt5');
   const [days, setDays] = useState<number>(90);
@@ -451,6 +454,7 @@ export const TradingAnalyticsModal: React.FC = () => {
 
   if (!analyticsHubOpen) return null;
 
+  const currency = source === 'paper' ? 'USD' : data?.currency || accountCurrency || 'USD';
   const k = data?.kpis || {};
   const monthLabel = new Intl.DateTimeFormat('en-US', {
     month: 'long',
@@ -567,7 +571,7 @@ export const TradingAnalyticsModal: React.FC = () => {
                 {[
                   {
                     label: 'Net Profit & Gain',
-                    val: `${(k.net_profit ?? 0) >= 0 ? '+' : '-'}$${Math.abs(k.net_profit ?? 0).toFixed(2)}`,
+                    val: formatAccountMoney(k.net_profit ?? 0, currency, { signed: true }),
                     sub: `${(k.gain_pct ?? 0) >= 0 ? '+' : ''}${k.gain_pct ?? 0}% Gain`,
                     pos: (k.net_profit ?? 0) >= 0,
                   },
@@ -585,14 +589,14 @@ export const TradingAnalyticsModal: React.FC = () => {
                   },
                   {
                     label: 'Expectancy',
-                    val: `${(k.expectancy_money ?? 0) >= 0 ? '+' : '-'}$${Math.abs(k.expectancy_money ?? 0).toFixed(2)}`,
+                    val: formatAccountMoney(k.expectancy_money ?? 0, currency, { signed: true }),
                     sub: `${(k.expectancy_pips ?? 0) >= 0 ? '+' : ''}${k.expectancy_pips ?? 0} pips / trade`,
                     pos: (k.expectancy_money ?? 0) >= 0,
                   },
                   {
                     label: 'Max Drawdown',
                     val: `${k.max_drawdown_pct ?? 0}%`,
-                    sub: `$${(k.max_drawdown_money ?? 0).toFixed(2)}`,
+                    sub: formatAccountMoney(k.max_drawdown_money ?? 0, currency),
                     pos: (k.max_drawdown_pct ?? 0) < 10,
                   },
                   {
@@ -603,8 +607,8 @@ export const TradingAnalyticsModal: React.FC = () => {
                   },
                   {
                     label: 'Best / Worst Trade',
-                    val: `+$${(k.best_trade_money ?? 0).toFixed(2)}`,
-                    sub: `Worst: -$${Math.abs(k.worst_trade_money ?? 0).toFixed(2)}`,
+                    val: formatAccountMoney(k.best_trade_money ?? 0, currency, { signed: true }),
+                    sub: `Worst: ${formatAccountMoney(k.worst_trade_money ?? 0, currency, { signed: true })}`,
                     pos: true,
                   },
                   {
@@ -642,7 +646,7 @@ export const TradingAnalyticsModal: React.FC = () => {
                       Cumulative Equity Growth Curve
                     </span>
                     <span className="text-[11px] font-mono-num text-[#787b86]">
-                      Bal: ${(data?.current_balance ?? 0).toLocaleString()}
+                      Bal: {formatAccountMoney(data?.current_balance ?? 0, currency)}
                     </span>
                   </div>
                   <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full h-[200px] bg-[#131722] rounded">
@@ -682,16 +686,16 @@ export const TradingAnalyticsModal: React.FC = () => {
                   </div>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11.5px] font-mono-num">
                     {[
-                      ['Gross Profit', `+$${(k.gross_profit ?? 0).toFixed(2)}`],
-                      ['Gross Loss', `-$${Math.abs(k.gross_loss ?? 0).toFixed(2)}`],
-                      ['Avg Win ($)', `+$${(k.avg_win_money ?? 0).toFixed(2)}`],
-                      ['Avg Loss ($)', `-$${Math.abs(k.avg_loss_money ?? 0).toFixed(2)}`],
+                      ['Gross Profit', formatAccountMoney(Math.abs(k.gross_profit ?? 0), currency, { signed: true })],
+                      ['Gross Loss', formatAccountMoney(-Math.abs(k.gross_loss ?? 0), currency, { signed: true })],
+                      [`Avg Win (${currency})`, formatAccountMoney(Math.abs(k.avg_win_money ?? 0), currency, { signed: true })],
+                      [`Avg Loss (${currency})`, formatAccountMoney(-Math.abs(k.avg_loss_money ?? 0), currency, { signed: true })],
                       ['Avg Win (p)', `+${k.avg_win_pips ?? 0}p`],
                       ['Avg Loss (p)', `${k.avg_loss_pips ?? 0}p`],
                       ['Sharpe Ratio', `${k.sharpe_ratio ?? 0}`],
                       ['Consec. W / L', `${k.max_consecutive_wins ?? 0} / ${k.max_consecutive_losses ?? 0}`],
-                      ['Commissions', `$${(k.total_commission ?? 0).toFixed(2)}`],
-                      ['Swaps', `$${(k.total_swap ?? 0).toFixed(2)}`],
+                      ['Commissions', formatAccountMoney(k.total_commission ?? 0, currency)],
+                      ['Swaps', formatAccountMoney(k.total_swap ?? 0, currency)],
                     ].map(([lbl, val]) => (
                       <div key={lbl} className="flex justify-between border-b border-[#2a2e39]/50 pb-1">
                         <span className="text-[#787b86] font-sans">{lbl}</span>
@@ -719,7 +723,7 @@ export const TradingAnalyticsModal: React.FC = () => {
                           <span>
                             {s.trades}t · {s.win_rate}% ·{' '}
                             <span className={s.net_pnl >= 0 ? 'text-[#089981]' : 'text-[#f23645]'}>
-                              {s.net_pnl >= 0 ? '+' : '-'}${Math.abs(s.net_pnl).toFixed(2)}
+                              {formatAccountMoney(s.net_pnl, currency, { signed: true })}
                             </span>
                           </span>
                         </div>
@@ -739,7 +743,7 @@ export const TradingAnalyticsModal: React.FC = () => {
                         <span className="font-sans text-[#d1d4dc] w-10">{d.day}</span>
                         <span className="text-[#787b86]">{d.trades}t ({d.win_rate}%)</span>
                         <span className={d.net_pnl >= 0 ? 'text-[#089981]' : 'text-[#f23645]'}>
-                          {d.net_pnl >= 0 ? '+' : '-'}${Math.abs(d.net_pnl).toFixed(2)}
+                          {formatAccountMoney(d.net_pnl, currency, { signed: true })}
                         </span>
                       </div>
                     ))}
@@ -758,7 +762,7 @@ export const TradingAnalyticsModal: React.FC = () => {
                           {st.tag}
                         </span>
                         <span className={st.net_pnl >= 0 ? 'text-[#089981]' : 'text-[#f23645]'}>
-                          {st.trades}t · {st.net_pnl >= 0 ? '+' : '-'}${Math.abs(st.net_pnl).toFixed(2)}
+                          {st.trades}t · {formatAccountMoney(st.net_pnl, currency, { signed: true })}
                         </span>
                       </div>
                     ))}
@@ -770,7 +774,7 @@ export const TradingAnalyticsModal: React.FC = () => {
                             {m.tag}
                           </span>
                           <span className={m.net_pnl >= 0 ? 'text-[#089981]' : 'text-[#f23645]'}>
-                            {m.trades}t · {m.net_pnl >= 0 ? '+' : '-'}${Math.abs(m.net_pnl).toFixed(2)}
+                            {m.trades}t · {formatAccountMoney(m.net_pnl, currency, { signed: true })}
                           </span>
                         </div>
                       ))}
@@ -881,6 +885,7 @@ export const TradingAnalyticsModal: React.FC = () => {
                         <JournalTradeRow
                           key={t.trade_key}
                           trade={t}
+                          currency={currency}
                           isExpanded={expandedTradeKey === t.trade_key}
                           onToggleExpand={handleToggleExpand}
                           onUpdateMeta={handleUpdateMeta}
@@ -972,7 +977,7 @@ export const TradingAnalyticsModal: React.FC = () => {
                         monthSummary.netPnl >= 0 ? 'text-[#089981]' : 'text-[#f23645]'
                       }`}
                     >
-                      {monthSummary.netPnl >= 0 ? '+' : '-'}${Math.abs(monthSummary.netPnl).toFixed(2)}
+                      {formatAccountMoney(monthSummary.netPnl, currency, { signed: true })}
                     </span>
                   </div>
                   <div className="hidden sm:block text-[#d1d4dc]">
@@ -1041,7 +1046,7 @@ export const TradingAnalyticsModal: React.FC = () => {
                                   isPos ? 'text-[#089981]' : 'text-[#f23645]'
                                 }`}
                               >
-                                {isPos ? '+' : '-'}${Math.abs(stat!.net_pnl).toFixed(2)}
+                                {formatAccountMoney(stat!.net_pnl, currency, { signed: true })}
                               </div>
                               <div className="flex items-center justify-between text-[9.5px] font-mono-num text-[#d1d4dc]/80">
                                 <span>
@@ -1073,8 +1078,8 @@ export const TradingAnalyticsModal: React.FC = () => {
                         }`}
                       >
                         {wk.weekTrades === 0
-                          ? '$0.00'
-                          : `${wk.weekPnl >= 0 ? '+' : '-'}$${Math.abs(wk.weekPnl).toFixed(2)}`}
+                          ? formatAccountMoney(0, currency)
+                          : formatAccountMoney(wk.weekPnl, currency, { signed: true })}
                       </div>
                       <div className="text-[9.5px] font-mono-num text-[#787b86] text-center">
                         {wk.weekTrades} trades · {wk.weekPips >= 0 ? '+' : ''}
@@ -1127,7 +1132,7 @@ export const TradingAnalyticsModal: React.FC = () => {
                                   tr.net_pnl >= 0 ? 'text-[#089981] font-bold' : 'text-[#f23645] font-bold'
                                 }
                               >
-                                {tr.net_pnl >= 0 ? '+' : '-'}${Math.abs(tr.net_pnl).toFixed(2)}
+                                {formatAccountMoney(tr.net_pnl, currency, { signed: true })}
                               </span>
                               <button
                                 onClick={() => handleViewOnChart(tr)}

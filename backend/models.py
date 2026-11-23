@@ -19,6 +19,12 @@ class CandlesResponse(BaseModel):
     point: float
     has_more: bool
     candles: List[CandleItem]
+    tick_size: Optional[float] = None
+    tick_value: Optional[float] = None
+    tick_value_profit: Optional[float] = None
+    tick_value_loss: Optional[float] = None
+    contract_size: Optional[float] = None
+    currency_profit: Optional[str] = None
 
 
 class SymbolMetadata(BaseModel):
@@ -31,6 +37,12 @@ class SymbolMetadata(BaseModel):
     bid: Optional[float] = None
     ask: Optional[float] = None
     spread_points: Optional[int] = None
+    tick_size: Optional[float] = None
+    tick_value: Optional[float] = None
+    tick_value_profit: Optional[float] = None
+    tick_value_loss: Optional[float] = None
+    contract_size: Optional[float] = None
+    currency_profit: Optional[str] = None
 
 
 class MT5StatusResponse(BaseModel):
@@ -148,9 +160,17 @@ class PositionItem(BaseModel):
     tp: float = 0.0
     profit: float = 0.0
     swap: float = 0.0
+    commission: float = 0.0
     open_time_ms: int
     comment: str = ""
     digits: Optional[int] = None
+    tick_size: Optional[float] = None
+    tick_value: Optional[float] = None
+    tick_value_profit: Optional[float] = None
+    tick_value_loss: Optional[float] = None
+    contract_size: Optional[float] = None
+    sl_profit: Optional[float] = None
+    tp_profit: Optional[float] = None
 
 
 class PendingOrderItem(BaseModel):
@@ -165,6 +185,27 @@ class PendingOrderItem(BaseModel):
     setup_time_ms: int
     comment: str = ""
     digits: Optional[int] = None
+    tick_size: Optional[float] = None
+    tick_value: Optional[float] = None
+    tick_value_profit: Optional[float] = None
+    tick_value_loss: Optional[float] = None
+    contract_size: Optional[float] = None
+    sl_profit: Optional[float] = None
+    tp_profit: Optional[float] = None
+
+
+class CalcProfitRequest(BaseModel):
+    symbol: str
+    side: str  # 'BUY' | 'SELL' (or pending order_type e.g. 'BUY_LIMIT')
+    volume: float
+    entry_price: float
+    target_price: float
+
+
+class CalcProfitResponse(BaseModel):
+    symbol: str
+    profit: Optional[float] = None
+    currency: str = "USD"
 
 
 class PlaceOrderRequest(BaseModel):

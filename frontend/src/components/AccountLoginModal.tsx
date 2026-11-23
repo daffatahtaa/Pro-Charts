@@ -18,6 +18,7 @@ import {
 import { api } from '../services/api';
 import { useChartStore } from '../store/useChartStore';
 import { MT5BrokerInfo, SavedMT5Account } from '../types/chart';
+import { formatAccountMoney } from '../utils/calcProfit';
 
 type BrokerCatFilter = 'ALL' | 'LOCAL' | 'FOREX' | 'PROP';
 type ServerTypeFilter = 'ALL' | 'LIVE' | 'DEMO';
@@ -261,11 +262,11 @@ export const AccountLoginModal: React.FC = () => {
               <div className="text-[12px] text-[#d1d4dc]">
                 Bal:{' '}
                 <span className="text-white font-semibold">
-                  ${(account?.balance ?? 0).toFixed(2)}
+                  {formatAccountMoney(account?.balance ?? 0, account?.currency)}
                 </span>
               </div>
               <div className="text-[11px] text-[#787b86]">
-                Eq: ${(account?.equity ?? 0).toFixed(2)}
+                Eq: {formatAccountMoney(account?.equity ?? 0, account?.currency)}
               </div>
             </div>
           </div>

@@ -41,6 +41,12 @@ export interface CandlesApiResponse {
   point: number;
   has_more: boolean;
   candles: Candle[];
+  tick_size?: number | null;
+  tick_value?: number | null;
+  tick_value_profit?: number | null;
+  tick_value_loss?: number | null;
+  contract_size?: number | null;
+  currency_profit?: string | null;
 }
 
 export const api = {
@@ -196,6 +202,20 @@ export const api = {
   cancelOrder(ticket: number): Promise<TradeResultResponse> {
     return fetchJson<TradeResultResponse>(`${API_BASE}/mt5/trade/cancel/${ticket}`, {
       method: 'POST',
+    });
+  },
+
+  calcProfit(payload: {
+    symbol: string;
+    side: string;
+    volume: number;
+    entry_price: number;
+    target_price: number;
+  }): Promise<{ symbol: string; profit: number | null; currency: string }> {
+    return fetchJson(`${API_BASE}/mt5/trade/calc-profit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
   },
 

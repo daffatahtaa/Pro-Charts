@@ -5,7 +5,8 @@ import { api } from '../services/api';
 import { unlockAudio } from '../services/sound';
 import { useChartStore } from '../store/useChartStore';
 import { PriceAlertItem } from '../types/chart';
-import { formatTradePrice, formatUnsignedMoney } from '../utils/formatPrice';
+import { formatTradePrice } from '../utils/formatPrice';
+import { estimateTradeMoney, formatAccountMoney } from '../utils/calcProfit';
 
 export interface ActivePositionEditor {
   key: string;
@@ -35,6 +36,13 @@ interface NormalizedTrade {
   sl: number;
   tp: number;
   profit: number;
+  tickSize?: number | null;
+  tickValue?: number | null;
+  tickValueProfit?: number | null;
+  tickValueLoss?: number | null;
+  contractSize?: number | null;
+  slProfit?: number | null;
+  tpProfit?: number | null;
 }
 
 interface DragState {
@@ -96,6 +104,7 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
     liveTick,
     chartSettings,
     replay,
+    account,
     positions,
     orders,
     alerts,
@@ -510,6 +519,13 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
           sl: p.sl,
           tp: p.tp,
           profit: p.profit,
+          tickSize: p.tick_size,
+          tickValue: p.tick_value,
+          tickValueProfit: p.tick_value_profit,
+          tickValueLoss: p.tick_value_loss,
+          contractSize: p.contract_size,
+          slProfit: p.sl_profit,
+          tpProfit: p.tp_profit,
         });
       }
       for (const o of orders) {
@@ -528,6 +544,13 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
           sl: o.sl,
           tp: o.tp,
           profit: 0,
+          tickSize: o.tick_size,
+          tickValue: o.tick_value,
+          tickValueProfit: o.tick_value_profit,
+          tickValueLoss: o.tick_value_loss,
+          contractSize: o.contract_size,
+          slProfit: o.sl_profit,
+          tpProfit: o.tp_profit,
         });
       }
     }
@@ -698,16 +721,72 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
           ? chartSettings.positionProfitColor || '#089981'
           : chartSettings.positionLossColor || '#f23645';
 
-        const slDist = effSl > 0 ? Math.abs(effEntry - effSl) : 0;
-        const tpDist = effTp > 0 ? Math.abs(effTp - effEntry) : 0;
-        const slPips = slDist > 0 ? (slDist / pipSize).toFixed(1) : '0.0';
-        const tpPips = tpDist > 0 ? (tpDist / pipSize).toFixed(1) : '0.0';
+        const accountCurrency = tr.mode === 'paper' ? 'USD' : account?.currency || 'USD';
+        const slSignedDist =
+          effSl > 0 ? (tr.side === 'BUY' ? effSl - effEntry : effEntry - effSl) : 0;
+        const tpSignedDist =
+          effTp > 0 ? (tr.side === 'BUY' ? effTp - effEntry : effEntry - effTp) : 0;
+        const slDist = Math.abs(slSignedDist);
+        const tpDist = Math.abs(tpSignedDist);
+        const slPipsNum = effSl > 0 ? slSignedDist / pipSize : 0;
+        const tpPipsNum = effTp > 0 ? tpSignedDist / pipSize : 0;
+        const slPipsLabel = `${slPipsNum >= 0 ? '+' : ''}${slPipsNum.toFixed(1)}p`;
+        const tpPipsLabel = `${tpPipsNum >= 0 ? '+' : ''}${tpPipsNum.toFixed(1)}p`;
         const rr = slDist > 0 && tpDist > 0 ? (tpDist / slDist).toFixed(2) : null;
 
-        // Rough dollar estimate per pip based on volume (fallback visual guide)
-        const estPerPip = tr.volume * 10;
-        const estLoss = formatUnsignedMoney(parseFloat(slPips) * estPerPip, 2);
-        const estProfit = formatUnsignedMoney(parseFloat(tpPips) * estPerPip, 2);
+        // Use exact native MT5 `order_calc_profit` when at resting price;
+        // compute exact calibrated tick-value valuation during live drag/edit.
+        const isAtRestingSl =
+          !isDraggingThis &&
+          Math.abs(effSl - tr.sl) < point * 0.25 &&
+          Math.abs(effEntry - tr.entryPrice) < point * 0.25;
+        const isAtRestingTp =
+          !isDraggingThis &&
+          Math.abs(effTp - tr.tp) < point * 0.25 &&
+          Math.abs(effEntry - tr.entryPrice) < point * 0.25;
+
+        const valSpec = {
+          tickSize: tr.tickSize ?? symbolInfo.tick_size,
+          tickValue: tr.tickValue ?? symbolInfo.tick_value,
+          tickValueProfit: tr.tickValueProfit ?? symbolInfo.tick_value_profit,
+          tickValueLoss: tr.tickValueLoss ?? symbolInfo.tick_value_loss,
+          contractSize: tr.contractSize ?? symbolInfo.contract_size,
+        };
+
+        const slMoneyVal: number | null =
+          effSl > 0
+            ? isAtRestingSl && typeof tr.slProfit === 'number' && Number.isFinite(tr.slProfit)
+              ? tr.slProfit
+              : estimateTradeMoney({
+                  side: tr.side,
+                  entryPrice: effEntry,
+                  targetPrice: effSl,
+                  volume: tr.volume,
+                  ...valSpec,
+                })
+            : null;
+
+        const tpMoneyVal: number | null =
+          effTp > 0
+            ? isAtRestingTp && typeof tr.tpProfit === 'number' && Number.isFinite(tr.tpProfit)
+              ? tr.tpProfit
+              : estimateTradeMoney({
+                  side: tr.side,
+                  entryPrice: effEntry,
+                  targetPrice: effTp,
+                  volume: tr.volume,
+                  ...valSpec,
+                })
+            : null;
+
+        const slMoneyLabel =
+          slMoneyVal !== null
+            ? formatAccountMoney(slMoneyVal, accountCurrency, { signed: true })
+            : null;
+        const tpMoneyLabel =
+          tpMoneyVal !== null
+            ? formatAccountMoney(tpMoneyVal, accountCurrency, { signed: true })
+            : null;
 
         return (
           <React.Fragment key={tr.key}>
@@ -763,7 +842,8 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
                 >
                   <ArrowUpDown className="w-3 h-3 opacity-85 shrink-0" />
                   <span>
-                    TP: {formatTradePrice(effTp, digits)} (+{tpPips}p | ~+${estProfit}
+                    TP: {formatTradePrice(effTp, digits)} ({tpPipsLabel}
+                    {tpMoneyLabel ? ` | ${tpMoneyLabel}` : ''}
                     {rr ? ` | R:R 1:${rr}` : ''})
                   </span>
                 </div>
@@ -794,7 +874,8 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
                 >
                   <ArrowUpDown className="w-3 h-3 opacity-85 shrink-0" />
                   <span>
-                    SL: {formatTradePrice(effSl, digits)} (-{slPips}p | ~-${estLoss})
+                    SL: {formatTradePrice(effSl, digits)} ({slPipsLabel}
+                    {slMoneyLabel ? ` | ${slMoneyLabel}` : ''})
                   </span>
                 </div>
               </div>
@@ -909,8 +990,8 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
                     </span>
                   ) : (
                     <span>
-                      {tr.side} {tr.volume.toFixed(2)} | {tr.profit >= 0 ? '+' : '-'}$
-                      {formatUnsignedMoney(tr.profit, 2)}
+                      {tr.side} {tr.volume.toFixed(2)} |{' '}
+                      {formatAccountMoney(tr.profit, accountCurrency, { signed: true })}
                     </span>
                   )}
 

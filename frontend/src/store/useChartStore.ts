@@ -731,6 +731,12 @@ export const useChartStore = create<ChartStore>((set, get) => ({
         digits: info?.digits ?? state.symbolInfo.digits,
         point: info?.point ?? state.symbolInfo.point,
         category: info?.category ?? 'Other',
+        tick_size: info?.tick_size ?? null,
+        tick_value: info?.tick_value ?? null,
+        tick_value_profit: info?.tick_value_profit ?? null,
+        tick_value_loss: info?.tick_value_loss ?? null,
+        contract_size: info?.contract_size ?? null,
+        currency_profit: info?.currency_profit ?? null,
       },
       selectedOverlay: null,
       liveTick: null,
@@ -2106,10 +2112,21 @@ export const useChartStore = create<ChartStore>((set, get) => ({
   },
 
   setTradeState: (payload) =>
-    set({
-      account: payload.account,
-      positions: payload.positions || [],
-      orders: payload.orders || [],
+    set((state) => {
+      const prev = state.account;
+      const next = payload.account;
+      const accountSwitched =
+        Boolean(prev && next) &&
+        ((prev!.login > 0 && next!.login > 0 && prev!.login !== next!.login) ||
+          (Boolean(prev!.currency) && Boolean(next!.currency) && prev!.currency !== next!.currency));
+      return {
+        account: next,
+        positions: payload.positions || [],
+        orders: payload.orders || [],
+        ...(accountSwitched && !state.replay.isActive
+          ? { symbolReloadNonce: state.symbolReloadNonce + 1 }
+          : {}),
+      };
     }),
 
   toggleTradeDock: () => set((state) => ({ tradeDockOpen: !state.tradeDockOpen })),
