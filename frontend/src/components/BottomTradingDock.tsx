@@ -31,6 +31,13 @@ export const BottomTradingDock: React.FC = () => {
     cancelPaperTrade,
     breakevenPaperTrade,
     bulkPaperModify,
+    bulkScope,
+    bulkPairFilter,
+    selectedTickets,
+    setBulkScope,
+    setBulkPairFilter,
+    toggleBulkTicket,
+    setBulkTickets,
     setAccountModalOpen,
     setBacktestModalOpen,
     openAnalyticsHub,
@@ -38,9 +45,6 @@ export const BottomTradingDock: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'positions' | 'orders'>('positions');
   const [busyTicket, setBusyTicket] = useState<number | null>(null);
-  const [selectedTickets, setSelectedTickets] = useState<Set<number>>(new Set());
-  const [scope, setScope] = useState<'all' | 'pair' | 'selected'>('all');
-  const [pairFilter, setPairFilter] = useState<string>('');
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkEditorOpen, setBulkEditorOpen] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; kind: 'live' | 'paper'; symbol: string } | null>(null);
@@ -107,28 +111,16 @@ export const BottomTradingDock: React.FC = () => {
 
   const uniqueSymbols = Array.from(new Set(positions.map((p) => p.symbol))).sort();
   const bulkTargetTickets = (): number[] => {
-    if (scope === 'pair') return positions.filter((p) => p.symbol === pairFilter).map((p) => p.ticket);
-    if (scope === 'selected') return [...selectedTickets];
+    if (bulkScope === 'pair') return positions.filter((p) => p.symbol === bulkPairFilter).map((p) => p.ticket);
+    if (bulkScope === 'selected')
+      return selectedTickets.filter((t) => positions.some((p) => p.ticket === t));
     return positions.map((p) => p.ticket);
   };
   const bulkCount = bulkTargetTickets().length;
 
-  const toggleTicket = (ticket: number) => {
-    setSelectedTickets((prev) => {
-      const next = new Set(prev);
-      if (next.has(ticket)) next.delete(ticket);
-      else next.add(ticket);
-      return next;
-    });
-  };
-
   const toggleAllVisible = () => {
-    setSelectedTickets((prev) => {
-      const next = new Set(prev);
-      const allSelected = positions.every((p) => next.has(p.ticket));
-      positions.forEach((p) => (allSelected ? next.delete(p.ticket) : next.add(p.ticket)));
-      return next;
-    });
+    const allSelected = positions.every((p) => selectedTickets.includes(p.ticket));
+    setBulkTickets(allSelected ? [] : positions.map((p) => p.ticket));
   };
 
   const handleBulkApply = async (sl?: number, tp?: number) => {
@@ -431,21 +423,21 @@ export const BottomTradingDock: React.FC = () => {
                     <button
                       key={s}
                       onClick={() => {
-                        setScope(s);
-                        if (s === 'pair' && !pairFilter && uniqueSymbols.length) setPairFilter(uniqueSymbols[0]);
+                        setBulkScope(s);
+                        if (s === 'pair' && !bulkPairFilter && uniqueSymbols.length) setBulkPairFilter(uniqueSymbols[0]);
                       }}
                       className={`px-2 py-0.5 text-[10.5px] font-sans font-semibold capitalize transition-colors ${
-                        scope === s ? 'bg-[#2962ff]/20 text-[#2962ff]' : 'text-[#787b86] hover:text-[#d1d4dc]'
+                        bulkScope === s ? 'bg-[#2962ff]/20 text-[#2962ff]' : 'text-[#787b86] hover:text-[#d1d4dc]'
                       }`}
                     >
                       {s}
                     </button>
                   ))}
                 </div>
-                {scope === 'pair' && (
+                {bulkScope === 'pair' && (
                   <select
-                    value={pairFilter}
-                    onChange={(e) => setPairFilter(e.target.value)}
+                    value={bulkPairFilter}
+                    onChange={(e) => setBulkPairFilter(e.target.value)}
                     className="bg-[#131722] border border-[#2a2e39] rounded text-[10.5px] font-sans text-[#d1d4dc] px-1.5 py-0.5"
                   >
                     {uniqueSymbols.map((s) => (
@@ -474,7 +466,7 @@ export const BottomTradingDock: React.FC = () => {
                     <th className="py-1.5 px-2 font-medium">
                       <input
                         type="checkbox"
-                        checked={positions.length > 0 && positions.every((p) => selectedTickets.has(p.ticket))}
+                        checked={positions.length > 0 && positions.every((p) => selectedTickets.includes(p.ticket))}
                         onChange={toggleAllVisible}
                         className="accent-[#2962ff]"
                       />
@@ -510,8 +502,8 @@ export const BottomTradingDock: React.FC = () => {
                         <td className="py-1.5 px-2" onClick={(e) => e.stopPropagation()}>
                           <input
                             type="checkbox"
-                            checked={selectedTickets.has(pos.ticket)}
-                            onChange={() => toggleTicket(pos.ticket)}
+                            checked={selectedTickets.includes(pos.ticket)}
+                            onChange={() => toggleBulkTicket(pos.ticket)}
                             className="accent-[#2962ff]"
                           />
                         </td>
@@ -678,8 +670,8 @@ export const BottomTradingDock: React.FC = () => {
           <button
             onClick={() => {
               if (ctxMenu.kind === 'live') {
-                setScope('pair');
-                setPairFilter(ctxMenu.symbol);
+                setBulkScope('pair');
+                setBulkPairFilter(ctxMenu.symbol);
               }
               setBulkEditorOpen(true);
               setCtxMenu(null);

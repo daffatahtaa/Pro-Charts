@@ -106,13 +106,29 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
     showToast,
     refreshTradeState,
     modifyPaperTrade,
+    bulkPaperModify,
     closePaperTrade,
     cancelPaperTrade,
+    bulkScope,
+    bulkPairFilter,
+    selectedTickets,
   } = useChartStore();
 
   const [dragState, setDragState] = useState<DragState | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
   dragStateRef.current = dragState;
+
+  // Bulk drag targets: active only when the dock has an explicit bulk scope
+  // (pair or selected). Scope 'all' keeps single-trade drag behavior.
+  const bulkTargets = React.useMemo(() => {
+    if (bulkScope === 'pair' && bulkPairFilter)
+      return positions.filter((p) => p.symbol === bulkPairFilter).map((p) => p.ticket);
+    if (bulkScope === 'selected')
+      return selectedTickets.filter((t) => positions.some((p) => p.ticket === t));
+    return [];
+  }, [bulkScope, bulkPairFilter, selectedTickets, positions]);
+  const bulkTargetsRef = useRef<number[]>([]);
+  bulkTargetsRef.current = bulkTargets;
   const wasSelectedBeforeDownRef = useRef<boolean>(false);
   const lastDragMovedRef = useRef<boolean>(false);
   const dragCooldownRef = useRef<boolean>(false);
@@ -349,6 +365,42 @@ export const InteractiveTradeLayer: React.FC<InteractiveTradeLayerProps> = ({
       const newEntry = cur.curEntry;
       const newSl = cur.curSl;
       const newTp = cur.curTp;
+
+      // Bulk branch: SL/TP line drag applies to all bulk targets when active
+      if (!tr.isPending && (cur.kind === 'sl' || cur.kind === 'tp')) {
+        if (tr.mode === 'paper') {
+          const paperIds = paperAccount.trades
+            .filter((t) => t.symbol === symbol && t.status === 'OPEN')
+            .map((t) => t.id);
+          if (paperIds.length > 1) {
+            bulkPaperModify(paperIds, {
+              sl: cur.kind === 'sl' ? newSl : undefined,
+              tp: cur.kind === 'tp' ? newTp : undefined,
+            });
+            showToast('success', `Bulk updated ${paperIds.length} paper trades`);
+            return;
+          }
+        } else {
+          const targets = bulkTargetsRef.current;
+          if (targets.length > 0) {
+            try {
+              const payload: { tickets: number[]; sl?: number; tp?: number } = { tickets: targets };
+              if (cur.kind === 'sl') payload.sl = newSl;
+              if (cur.kind === 'tp') payload.tp = newTp;
+              const res = await api.bulkModifyTrade(payload);
+              if (res.success) {
+                showToast('success', `Bulk updated ${targets.length} position(s)`);
+                await refreshTradeState();
+              } else {
+                showToast('error', res.message || 'Bulk modify failed');
+              }
+            } catch (err: any) {
+              showToast('error', err?.message || 'Bulk modify failed');
+            }
+            return;
+          }
+        }
+      }
 
       if (tr.mode === 'paper') {
         modifyPaperTrade(String(tr.id), {

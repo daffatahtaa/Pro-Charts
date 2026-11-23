@@ -438,6 +438,13 @@ interface ChartStore {
   modifyPaperTrade: (tradeId: string, patch: { entry_price?: number; sl?: number; tp?: number }) => void;
   bulkPaperModify: (ids: string[], patch: { sl?: number; tp?: number }) => void;
   bulkPaperClose: (ids: string[]) => void;
+  bulkScope: 'all' | 'pair' | 'selected';
+  bulkPairFilter: string;
+  selectedTickets: number[];
+  setBulkScope: (s: 'all' | 'pair' | 'selected') => void;
+  setBulkPairFilter: (s: string) => void;
+  toggleBulkTicket: (ticket: number) => void;
+  setBulkTickets: (tickets: number[]) => void;
   placePaperOrder: (payload: {
     side: 'BUY' | 'SELL';
     order_mode: 'MARKET' | 'PENDING';
@@ -2191,6 +2198,19 @@ export const useChartStore = create<ChartStore>((set, get) => ({
     });
     get().syncPaperBacktest();
   },
+
+  bulkScope: 'all',
+  bulkPairFilter: '',
+  selectedTickets: [],
+  setBulkScope: (s) => set({ bulkScope: s }),
+  setBulkPairFilter: (s) => set({ bulkPairFilter: s }),
+  toggleBulkTicket: (ticket) =>
+    set((state) => ({
+      selectedTickets: state.selectedTickets.includes(ticket)
+        ? state.selectedTickets.filter((t) => t !== ticket)
+        : [...state.selectedTickets, ticket],
+    })),
+  setBulkTickets: (tickets) => set({ selectedTickets: tickets }),
 
   bulkPaperClose: (ids) => {
     const state = get();
